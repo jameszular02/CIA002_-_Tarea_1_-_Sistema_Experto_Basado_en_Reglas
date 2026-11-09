@@ -159,9 +159,6 @@ CATALOGO = [
     {"id": "echeveria", "nombre": "Echeveria", "cientifico": "Echeveria spp.",
      "toxicidad": "segura",
      "tip": "Sustrato muy drenado; protéjala de la lluvia directa."},
-    {"id": "haworthia", "nombre": "Haworthia", "cientifico": "Haworthia spp.",
-     "toxicidad": "segura",
-     "tip": "Luz brillante sin sol fuerte; riego escaso."},
 
     # --- Plantas sin registro en ASPCA ---------------------------------------
     {"id": "veranera", "nombre": "Veranera", "cientifico": "Bougainvillea spp.",
@@ -275,9 +272,9 @@ HECHOS_DERIVADOS = {
 #   - Las reglas que solo concluyen plantas "segura" o "sin_registro" no
 #     llevan esa condición: sirven para cualquier hogar. El filtro de
 #     seguridad (sección 5) igual revisa cada planta y agrega los avisos.
-#   - Excepción a propósito: R32 mezcla una planta tóxica (caña india) con
-#     una segura (palma areca) y no lleva la condición. Con mascotas, el
-#     filtro de seguridad quita la caña india y conserva la areca.
+#   - Si una situación tiene plantas tóxicas y seguras, se escriben dos
+#     reglas (por ejemplo R32 y R33): una con restriccion = ninguna y todas
+#     las plantas, y otra sin restricción solo con las seguras.
 
 EXTERIOR = ["balcon_terraza", "jardin"]
 CALIDO_O_TEMPLADO = ["calido", "templado"]
@@ -401,12 +398,17 @@ REGLAS = [
      "si": {"ambiente": "exterior_sombra", "clima": "templado",
             "objetivo": "flores", "nivel": "avanzado"},
      "entonces": ["guaria_morada"]},
-    # La caña india "tolera sol y sombra" según su propio consejo; la areca
-    # tolera exterior si se riega bien.
+    # Cerca viva en sombra. La caña india "tolera sol y sombra" según su
+    # propio consejo; la areca tolera exterior si se riega bien. Como la
+    # caña india es tóxica, la situación se divide en dos reglas.
     {"id": "R32", "tipo": "final", "certeza": 75,
      "si": {"ambiente": "exterior_sombra", "objetivo": "cerca_viva",
-            "clima": CALIDO_O_TEMPLADO},
+            "clima": CALIDO_O_TEMPLADO, "restriccion": "ninguna"},
      "entonces": ["cana_india", "areca"]},
+    {"id": "R33", "tipo": "final", "certeza": 75,
+     "si": {"ambiente": "exterior_sombra", "objetivo": "cerca_viva",
+            "clima": CALIDO_O_TEMPLADO},
+     "entonces": ["areca"]},
 ]
 
 # Huecos conocidos: combinaciones donde el sistema, a propósito, NO recomienda
@@ -554,6 +556,31 @@ def filtrar_por_seguridad(activadas, hechos):
     return recomendaciones
 
 
+def quitar_repetidas(recomendaciones):
+    """Prepara las recomendaciones para mostrarlas sin plantas repetidas.
+
+    Recorre las recomendaciones en orden (de mayor a menor certeza o
+    prioridad) y quita de cada una las plantas que ya aparecieron en una
+    anterior. Si una alternativa queda sin plantas, no se muestra. No
+    modifica la lista original: la explicación y el historial siguen viendo
+    todas las reglas que se activaron.
+
+    Devuelve una lista de recomendaciones con la clave extra "repetidas"
+    (ids de las plantas que se omitieron por estar ya mostradas).
+    """
+    vistas = set()
+    visibles = []
+    for recomendacion in recomendaciones:
+        nuevas = [(p, aviso) for p, aviso in recomendacion["plantas"]
+                  if p not in vistas]
+        repetidas = [p for p, _ in recomendacion["plantas"] if p in vistas]
+        vistas.update(p for p, _ in nuevas)
+        if nuevas:
+            visibles.append(dict(recomendacion, plantas=nuevas,
+                                 repetidas=repetidas))
+    return visibles
+
+
 def buscar_hueco(hechos):
     """Devuelve el hueco conocido que corresponde a los hechos, o None."""
     for hueco in HUECOS_CONOCIDOS:
@@ -568,6 +595,8 @@ def resolver_consulta(respuestas):
     Encadena, evalúa, filtra y, si no queda ninguna recomendación, busca si
     el caso es un hueco conocido. No imprime nada: la salida es un
     diccionario que usan la interfaz, el historial y las pruebas.
+      "recomendaciones" -> todas las reglas finales activadas (filtradas).
+      "visibles"        -> las mismas, sin plantas repetidas (para mostrar).
     """
     hechos, origen, intermedias = encadenar(respuestas)
     activadas = evaluar(hechos)
@@ -575,7 +604,9 @@ def resolver_consulta(respuestas):
     hueco = None if recomendaciones else buscar_hueco(hechos)
     return {"respuestas": dict(respuestas), "hechos": hechos,
             "origen": origen, "intermedias": intermedias,
-            "recomendaciones": recomendaciones, "hueco": hueco}
+            "recomendaciones": recomendaciones,
+            "visibles": quitar_repetidas(recomendaciones),
+            "hueco": hueco}
 
 
 def validar_base_conocimiento():
@@ -588,6 +619,7 @@ def validar_base_conocimiento():
         en los hechos derivados;
       - conclusiones que referencian plantas fuera del catálogo;
       - certezas fuera de 0–100;
+      - casos de prueba con teclas inválidas o reglas inexistentes;
       - los mínimos del enunciado (reglas, preguntas y conclusiones).
     """
     errores = []
@@ -656,6 +688,24 @@ def validar_base_conocimiento():
 
     for hueco in HUECOS_CONOCIDOS:
         revisar_condiciones(hueco["id"], hueco["si"])
+
+    # Casos de prueba integrados: teclas válidas y resultados que existen.
+    ids_finales = {r["id"] for r in REGLAS if r["tipo"] == "final"}
+    ids_huecos = {h["id"] for h in HUECOS_CONOCIDOS}
+    for caso in CASOS_PRUEBA:
+        try:
+            respuestas_desde_teclas(caso["teclas"])
+        except ValueError as error:
+            errores.append(f"Caso {caso['id']}: {error}")
+        esperadas = caso["alternativas"] + ([caso["principal"]]
+                                            if caso["principal"] else [])
+        for id_regla in esperadas:
+            if id_regla not in ids_finales:
+                errores.append(f"Caso {caso['id']}: la regla final "
+                               f"{id_regla} no existe")
+        if caso["hueco"] and caso["hueco"] not in ids_huecos:
+            errores.append(f"Caso {caso['id']}: el hueco {caso['hueco']} "
+                           f"no existe")
 
     # Mínimos del enunciado.
     finales = [regla for regla in REGLAS if regla["tipo"] == "final"]
@@ -739,11 +789,13 @@ def explicar(resultado):
     Incluye, en orden: las reglas intermedias que se activaron (con las
     respuestas que las provocaron), las reglas finales activadas (con los
     hechos que usaron y de qué regla salió cada uno), las plantas que quitó
-    el filtro de seguridad y las reglas que la restricción dejó por fuera.
+    el filtro de seguridad, las que no se repiten en la salida y las reglas
+    que la restricción dejó por fuera.
     Devuelve texto sin imprimir para poder probarlo y reutilizarlo.
     """
     hechos, origen = resultado["hechos"], resultado["origen"]
     lineas = []
+    visibles = {rec["regla"]["id"]: rec for rec in resultado["visibles"]}
     for regla in resultado["intermedias"]:
         causas = " y ".join(describir_hecho(clave, hechos, origen)
                             for clave in regla["si"])
@@ -761,6 +813,17 @@ def explicar(resultado):
                                 for p in recomendacion["excluidas"])
             lineas.append(f"El filtro de seguridad quitó de {regla['id']}: "
                           f"{nombres} (tóxica según ASPCA)")
+        # Plantas que no se repiten en la salida porque ya se mostraron.
+        if regla["id"] not in visibles:
+            nombres = ", ".join(PLANTAS_POR_ID[p]["nombre"]
+                                for p, _ in recomendacion["plantas"])
+            lineas.append(f"{regla['id']} no se muestra como alternativa: "
+                          f"sus plantas ya aparecen arriba ({nombres})")
+        elif visibles[regla["id"]]["repetidas"]:
+            nombres = ", ".join(PLANTAS_POR_ID[p]["nombre"]
+                                for p in visibles[regla["id"]]["repetidas"])
+            lineas.append(f"De {regla['id']} se omiten plantas ya mostradas: "
+                          f"{nombres}")
     for regla in reglas_excluidas_por_restriccion(hechos):
         lineas.append(f"No se aplicó {regla['id']}: exige restriccion = "
                       f"ninguna, pero "
@@ -813,16 +876,19 @@ def mostrar_recomendacion(resultado):
         print(color(LINEA, CIAN))
         return
 
-    principal = recomendaciones[0]
+    # Se muestran las recomendaciones sin plantas repetidas; la principal
+    # nunca pierde plantas porque es la primera.
+    visibles = resultado["visibles"]
+    principal = visibles[0]
     regla = principal["regla"]
     print(color(f"Recomendación principal ({regla['id']}, certeza "
                 f"{regla['certeza']}%):", VERDE, NEGRITA))
     for id_planta, aviso in principal["plantas"]:
         print(f"  • {formatear_planta(id_planta, aviso)}")
 
-    if len(recomendaciones) > 1:
+    if len(visibles) > 1:
         print(color("Alternativas:", CIAN, NEGRITA))
-        for numero, alternativa in enumerate(recomendaciones[1:], start=2):
+        for numero, alternativa in enumerate(visibles[1:], start=2):
             regla = alternativa["regla"]
             print(f"  {numero}. {regla['id']} (certeza {regla['certeza']}%):")
             for id_planta, aviso in alternativa["plantas"]:
@@ -965,11 +1031,137 @@ def recolectar_hechos():
     return respuestas
 
 
-def main():
-    """Ciclo principal: validar, preguntar, inferir, explicar y repetir.
+# -----------------------------------------------------------------------------
+# Casos de prueba integrados (python loria_james_tarea1.py --pruebas)
+# -----------------------------------------------------------------------------
+# También son datos. "teclas" es exactamente lo que se escribe en la terminal,
+# en el orden de PREGUNTAS: zona, ubicación, luz, cuidado, mascotas (s/n),
+# objetivo y experiencia. "alternativas" son las que se MUESTRAN (sin las que
+# quedan vacías al quitar plantas repetidas). Están documentados en
+# casos_prueba.md y los usa también test_sistema.py.
 
+CASOS_PRUEBA = [
+    {"id": "A", "descripcion": "Interior, poca luz, follaje, sin mascotas",
+     "teclas": ["2", "1", "4", "2", "n", "2", "1"],
+     "principal": "R12", "alternativas": ["R13"], "hueco": None},
+    {"id": "B", "descripcion": "Interior, luz indirecta, follaje, mascotas",
+     "teclas": ["2", "1", "3", "2", "s", "2", "1"],
+     "principal": "R13", "alternativas": [], "hueco": None},
+    {"id": "C", "descripcion": "Jardín, pleno sol, bajura, flores",
+     "teclas": ["1", "3", "1", "2", "n", "1", "1"],
+     "principal": "R18", "alternativas": ["R19"], "hueco": None},
+    {"id": "D", "descripcion": "Jardín, semisombra, zona alta, flores",
+     "teclas": ["3", "3", "2", "2", "n", "1", "1"],
+     "principal": "R24", "alternativas": ["R25"], "hueco": None},
+    {"id": "E", "descripcion": "Balcón, pleno sol, poco cuidado, mascotas",
+     "teclas": ["2", "2", "1", "1", "s", "2", "1"],
+     "principal": "R29", "alternativas": [], "hueco": None},
+    {"id": "F", "descripcion": "Jardín, semisombra, bajura, flores, mascotas",
+     "teclas": ["1", "3", "2", "2", "s", "1", "1"],
+     "principal": "R26", "alternativas": [], "hueco": None},
+    {"id": "G", "descripcion": "Interior, poca luz, flores (sin conclusión)",
+     "teclas": ["2", "1", "4", "2", "n", "1", "1"],
+     "principal": None, "alternativas": [], "hueco": "H1"},
+    {"id": "H", "descripcion": "Cerca viva en sombra, bajura, mascotas",
+     "teclas": ["1", "3", "2", "2", "s", "3", "2"],
+     "principal": "R33", "alternativas": [], "hueco": None},
+    {"id": "I", "descripcion": "Pleno sol, clima fresco, follaje (no cubierto)",
+     "teclas": ["3", "2", "1", "2", "n", "2", "1"],
+     "principal": None, "alternativas": [], "hueco": None},
+]
+
+
+def respuestas_desde_teclas(teclas):
+    """Traduce las teclas de un caso a respuestas {clave: valor interno}.
+
+    Aplica las mismas reglas que preguntar(): número de opción en los menús
+    y s/n en las preguntas de sí o no. Una tecla inválida lanza ValueError.
+    """
+    if len(teclas) != len(PREGUNTAS):
+        raise ValueError(f"Se esperaban {len(PREGUNTAS)} teclas y hay "
+                         f"{len(teclas)}")
+    respuestas = {}
+    for pregunta, tecla in zip(PREGUNTAS, teclas):
+        if pregunta["tipo"] == "sn":
+            valor = interpretar_si_no(tecla)
+        elif tecla.isdecimal() and 1 <= int(tecla) <= len(pregunta["opciones"]):
+            valor = pregunta["opciones"][int(tecla) - 1][0]
+        else:
+            valor = None
+        if valor is None:
+            raise ValueError(f"Tecla «{tecla}» inválida para "
+                             f"{pregunta['clave']}")
+        respuestas[pregunta["clave"]] = valor
+    return respuestas
+
+
+def verificar_caso(caso):
+    """Ejecuta un caso de prueba y devuelve (correcto, texto_obtenido)."""
+    resultado = resolver_consulta(respuestas_desde_teclas(caso["teclas"]))
+    ids = [rec["regla"]["id"] for rec in resultado["visibles"]]
+    principal = ids[0] if ids else None
+    hueco = resultado["hueco"]["id"] if resultado["hueco"] else None
+    correcto = (principal == caso["principal"]
+                and ids[1:] == caso["alternativas"]
+                and hueco == caso["hueco"])
+    if principal:
+        certeza = resultado["visibles"][0]["regla"]["certeza"]
+        obtenido = f"{principal} ({certeza}%)"
+        if ids[1:]:
+            obtenido += ", alternativas " + ", ".join(ids[1:])
+    else:
+        obtenido = f"sin conclusión ({hueco or 'mensaje general'})"
+    return correcto, obtenido
+
+
+def ejecutar_casos_prueba():
+    """Modo --pruebas: corre CASOS_PRUEBA y muestra ✅/❌ y un resumen.
+
+    Devuelve 0 si todos los casos son correctos y 1 si alguno falla, para
+    que el resultado también se pueda revisar desde otro programa.
+    """
+    validar_base_conocimiento()
+    print(color("Casos de prueba integrados", NEGRITA, CIAN))
+    correctos = 0
+    for caso in CASOS_PRUEBA:
+        correcto, obtenido = verificar_caso(caso)
+        teclas = " ".join(caso["teclas"])
+        if correcto:
+            correctos += 1
+            print(f"  {color('✅', VERDE)} Caso {caso['id']} · "
+                  f"{caso['descripcion']} [{teclas}] → {obtenido}")
+        else:
+            esperado = caso["principal"] or f"sin conclusión ({caso['hueco']})"
+            print(f"  {color('❌', ROJO)} Caso {caso['id']} · "
+                  f"{caso['descripcion']} [{teclas}] → {obtenido}; "
+                  f"se esperaba {esperado}, alternativas "
+                  f"{caso['alternativas']}")
+    total = len(CASOS_PRUEBA)
+    estilo = VERDE if correctos == total else ROJO
+    print(color(f"{correctos}/{total} casos correctos", NEGRITA, estilo))
+    return 0 if correctos == total else 1
+
+
+USO = ("Uso:\n"
+       "  python loria_james_tarea1.py            consulta interactiva\n"
+       "  python loria_james_tarea1.py --pruebas  corre los casos de prueba")
+
+
+def main(argumentos=None):
+    """Punto de entrada: elige el modo según los argumentos de la terminal.
+
+    Sin argumentos: ciclo interactivo (validar, preguntar, inferir,
+    explicar y repetir). Con --pruebas: corre los casos integrados.
     Devuelve el código de salida del programa (0 si todo salió bien).
     """
+    if argumentos is None:
+        argumentos = sys.argv[1:]
+    if argumentos == ["--pruebas"]:
+        return ejecutar_casos_prueba()
+    if argumentos:
+        print(USO)
+        return 2
+
     try:
         validar_base_conocimiento()
     except BaseConocimientoInvalida as error:

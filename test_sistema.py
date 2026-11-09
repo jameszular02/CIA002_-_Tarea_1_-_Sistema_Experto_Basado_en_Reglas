@@ -24,51 +24,17 @@ def setUpModule():
 
 
 # -----------------------------------------------------------------------------
-# Casos de prueba (los mismos de casos_prueba.md).
-# "teclas" es exactamente lo que se escribe en la terminal, en orden:
-#   zona, ubicación, luz, cuidado, mascotas (s/n), objetivo, experiencia.
+# Los casos de prueba viven en el programa (CASOS_PRUEBA), así el modo
+# --pruebas, casos_prueba.md y estas pruebas usan exactamente los mismos.
 # -----------------------------------------------------------------------------
-CASOS = {
-    "a_interior_poca_luz_follaje": {
-        "teclas": ["2", "1", "4", "2", "n", "2", "1"],
-        "principal": "R12", "alternativas": ["R13"], "hueco": None},
-    "b_interior_luz_indirecta_follaje_mascotas": {
-        "teclas": ["2", "1", "3", "2", "s", "2", "1"],
-        "principal": "R13", "alternativas": [], "hueco": None},
-    "c_jardin_sol_bajura_flores": {
-        "teclas": ["1", "3", "1", "2", "n", "1", "1"],
-        "principal": "R18", "alternativas": ["R19"], "hueco": None},
-    "d_jardin_semisombra_altura_flores": {
-        "teclas": ["3", "3", "2", "2", "n", "1", "1"],
-        "principal": "R24", "alternativas": ["R25"], "hueco": None},
-    "e_balcon_sol_poco_cuidado_mascotas": {
-        "teclas": ["2", "2", "1", "1", "s", "2", "1"],
-        "principal": "R29", "alternativas": [], "hueco": None},
-    "f_jardin_semisombra_bajura_flores_mascotas": {
-        "teclas": ["1", "3", "2", "2", "s", "1", "1"],
-        "principal": "R26", "alternativas": [], "hueco": None},
-    "g_interior_poca_luz_flores_sin_conclusion": {
-        "teclas": ["2", "1", "4", "2", "n", "1", "1"],
-        "principal": None, "alternativas": [], "hueco": "H1"},
-    "h_cerca_viva_sombra_mascotas_filtro": {
-        "teclas": ["1", "3", "2", "2", "s", "3", "2"],
-        "principal": "R32", "alternativas": [], "hueco": None},
-    "i_sol_fresco_follaje_sin_cubrir": {
-        "teclas": ["3", "2", "1", "2", "n", "2", "1"],
-        "principal": None, "alternativas": [], "hueco": None},
-}
+CASOS = {caso["id"]: caso for caso in sistema.CASOS_PRUEBA}
+respuestas_desde_teclas = sistema.respuestas_desde_teclas
 
 
-def respuestas_desde_teclas(teclas):
-    """Convierte la lista de teclas en el diccionario de respuestas."""
-    respuestas = {}
-    for pregunta, tecla in zip(sistema.PREGUNTAS, teclas):
-        if pregunta["tipo"] == "sn":
-            respuestas[pregunta["clave"]] = tecla
-        else:
-            respuestas[pregunta["clave"]] = (
-                pregunta["opciones"][int(tecla) - 1][0])
-    return respuestas
+def resultado_de(id_caso):
+    """Resuelve un caso de prueba por su id (A, B, ...)."""
+    return sistema.resolver_consulta(
+        respuestas_desde_teclas(CASOS[id_caso]["teclas"]))
 
 
 def todas_las_respuestas():
@@ -135,7 +101,7 @@ class TestMotor(unittest.TestCase):
     """Encadenamiento hacia adelante, orden por certeza y desempates."""
 
     def test_encadenar_deduce_hechos_y_su_origen(self):
-        respuestas = respuestas_desde_teclas(CASOS["c_jardin_sol_bajura_flores"]
+        respuestas = respuestas_desde_teclas(CASOS["C"]
                                              ["teclas"])
         hechos, origen, disparadas = sistema.encadenar(respuestas)
         self.assertEqual(hechos["clima"], "calido")
@@ -169,7 +135,7 @@ class TestMotor(unittest.TestCase):
 
     def test_orden_por_certeza(self):
         resultado = sistema.resolver_consulta(respuestas_desde_teclas(
-            CASOS["a_interior_poca_luz_follaje"]["teclas"]))
+            CASOS["A"]["teclas"]))
         certezas = [r["regla"]["certeza"]
                     for r in resultado["recomendaciones"]]
         self.assertEqual(certezas, sorted(certezas, reverse=True))
@@ -203,8 +169,7 @@ class TestCasos(unittest.TestCase):
             with self.subTest(caso=nombre):
                 resultado = sistema.resolver_consulta(
                     respuestas_desde_teclas(caso["teclas"]))
-                ids = [r["regla"]["id"]
-                       for r in resultado["recomendaciones"]]
+                ids = [r["regla"]["id"] for r in resultado["visibles"]]
                 self.assertEqual(ids[:1], [caso["principal"]]
                                  if caso["principal"] else [])
                 self.assertEqual(ids[1:], caso["alternativas"])
@@ -223,7 +188,7 @@ class TestCasos(unittest.TestCase):
 
     def test_explicacion_estilo_mycin(self):
         resultado = sistema.resolver_consulta(respuestas_desde_teclas(
-            CASOS["c_jardin_sol_bajura_flores"]["teclas"]))
+            CASOS["C"]["teclas"]))
         lineas = sistema.explicar(resultado)
         self.assertIn("Se activó R1 porque: zona = bajura_caliente → "
                       "clima = calido", lineas)
@@ -235,14 +200,14 @@ class TestCasos(unittest.TestCase):
 
     def test_explicacion_de_reglas_excluidas_por_mascotas(self):
         resultado = sistema.resolver_consulta(respuestas_desde_teclas(
-            CASOS["b_interior_luz_indirecta_follaje_mascotas"]["teclas"]))
+            CASOS["B"]["teclas"]))
         texto = "\n".join(sistema.explicar(resultado))
         self.assertIn("No se aplicó R12: exige restriccion = ninguna, pero "
                       "restriccion = no_toxicas [de R7]", texto)
 
     def test_salida_sin_conclusion(self):
         resultado = sistema.resolver_consulta(respuestas_desde_teclas(
-            CASOS["g_interior_poca_luz_flores_sin_conclusion"]["teclas"]))
+            CASOS["G"]["teclas"]))
         salida = io.StringIO()
         with redirect_stdout(salida):
             sistema.mostrar_recomendacion(resultado)
@@ -254,7 +219,7 @@ class TestCasos(unittest.TestCase):
 
     def test_salida_sin_cubrir_usa_mensaje_general(self):
         resultado = sistema.resolver_consulta(respuestas_desde_teclas(
-            CASOS["i_sol_fresco_follaje_sin_cubrir"]["teclas"]))
+            CASOS["I"]["teclas"]))
         salida = io.StringIO()
         with redirect_stdout(salida):
             sistema.mostrar_recomendacion(resultado)
@@ -296,20 +261,135 @@ class TestFiltroSeguridad(unittest.TestCase):
         self.assertEqual(recomendaciones[0]["plantas"],
                          [("telefono", "toxica"), ("rosa", None)])
 
-    def test_r32_con_mascotas_quita_cana_india(self):
-        resultado = sistema.resolver_consulta(respuestas_desde_teclas(
-            CASOS["h_cerca_viva_sombra_mascotas_filtro"]["teclas"]))
-        recomendacion = resultado["recomendaciones"][0]
-        self.assertEqual(recomendacion["plantas"], [("areca", None)])
-        self.assertEqual(recomendacion["excluidas"], ["cana_india"])
+    def test_r32_no_aplica_con_mascotas_y_r33_da_solo_areca(self):
+        resultado = resultado_de("H")
+        ids = [r["regla"]["id"] for r in resultado["recomendaciones"]]
+        self.assertEqual(ids, ["R33"])
+        self.assertEqual(resultado["recomendaciones"][0]["plantas"],
+                         [("areca", None)])
+        self.assertIn("No se aplicó R32: exige restriccion = ninguna, pero "
+                      "restriccion = no_toxicas [de R7]",
+                      sistema.explicar(resultado))
+
+    def test_toda_regla_con_toxicas_exige_restriccion_ninguna(self):
+        # Principio de diseño: una regla que concluye plantas tóxicas debe
+        # exigir restriccion = ninguna (el filtro queda como respaldo).
+        for regla in sistema.REGLAS:
+            if regla["tipo"] != "final":
+                continue
+            if any(sistema.PLANTAS_POR_ID[p]["toxicidad"] == "toxica"
+                   for p in regla["entonces"]):
+                self.assertEqual(regla["si"].get("restriccion"), "ninguna",
+                                 regla["id"])
 
     def test_aviso_amarillo_para_sin_registro(self):
         resultado = sistema.resolver_consulta(respuestas_desde_teclas(
-            CASOS["f_jardin_semisombra_bajura_flores_mascotas"]["teclas"]))
+            CASOS["F"]["teclas"]))
         salida = io.StringIO()
         with redirect_stdout(salida):
             sistema.mostrar_recomendacion(resultado)
         self.assertIn(sistema.AVISO_SIN_REGISTRO, salida.getvalue())
+
+
+class TestPlantasRepetidas(unittest.TestCase):
+    """La salida no repite una planta ya mostrada en una recomendación previa."""
+
+    def test_quitar_repetidas_con_datos_de_prueba(self):
+        def rec(id_regla, plantas):
+            return {"regla": {"id": id_regla}, "excluidas": [],
+                    "plantas": [(p, None) for p in plantas]}
+        visibles = sistema.quitar_repetidas([
+            rec("R1", ["rosa", "chinas"]),
+            rec("R2", ["chinas", "hibisco"]),     # chinas se repite
+            rec("R3", ["rosa", "hibisco"]),       # queda vacía: no se muestra
+            rec("R4", ["areca"]),
+        ])
+        self.assertEqual([v["regla"]["id"] for v in visibles],
+                         ["R1", "R2", "R4"])
+        self.assertEqual(visibles[1]["plantas"], [("hibisco", None)])
+        self.assertEqual(visibles[1]["repetidas"], ["chinas"])
+
+    def test_ninguna_planta_se_repite_en_las_1296_combinaciones(self):
+        for respuestas in todas_las_respuestas():
+            resultado = sistema.resolver_consulta(respuestas)
+            mostradas = [p for v in resultado["visibles"]
+                         for p, _ in v["plantas"]]
+            self.assertEqual(len(mostradas), len(set(mostradas)), respuestas)
+            # La principal nunca pierde plantas.
+            if resultado["recomendaciones"]:
+                self.assertEqual(resultado["visibles"][0],
+                                 dict(resultado["recomendaciones"][0],
+                                      repetidas=[]))
+
+    def test_caso_c_alternativa_r19_solo_muestra_hibisco(self):
+        resultado = resultado_de("C")
+        self.assertEqual(resultado["visibles"][1]["plantas"],
+                         [("hibisco", None)])
+        salida = io.StringIO()
+        with redirect_stdout(salida):
+            sistema.mostrar_recomendacion(resultado)
+        alternativas = salida.getvalue().split("Alternativas:")[1]
+        alternativas = alternativas.split("¿Por qué?")[0]
+        self.assertIn("Amapola / hibisco", alternativas)
+        self.assertNotIn("Veranera", alternativas)
+        self.assertIn("De R19 se omiten plantas ya mostradas: Veranera, "
+                      "Moño de señora", sistema.explicar(resultado))
+
+    def test_alternativa_vacia_no_se_muestra(self):
+        # Sombra + cerca viva sin mascotas: R32 (caña india, areca) es la
+        # principal; R33 (solo areca) queda vacía y no se muestra.
+        resultado = sistema.resolver_consulta(respuestas_desde_teclas(
+            ["1", "3", "2", "2", "n", "3", "1"]))
+        self.assertEqual([r["regla"]["id"]
+                          for r in resultado["recomendaciones"]],
+                         ["R32", "R33"])
+        self.assertEqual([v["regla"]["id"] for v in resultado["visibles"]],
+                         ["R32"])
+        salida = io.StringIO()
+        with redirect_stdout(salida):
+            sistema.mostrar_recomendacion(resultado)
+        self.assertNotIn("Alternativas:", salida.getvalue())
+        self.assertIn("R33 no se muestra como alternativa: sus plantas ya "
+                      "aparecen arriba (Palma areca)", salida.getvalue())
+
+
+class TestModoPruebas(unittest.TestCase):
+    """El modo --pruebas corre CASOS_PRUEBA y resume el resultado."""
+
+    def test_todos_los_casos_correctos(self):
+        salida = io.StringIO()
+        with redirect_stdout(salida):
+            codigo = sistema.main(["--pruebas"])
+        self.assertEqual(codigo, 0)
+        total = len(sistema.CASOS_PRUEBA)
+        self.assertIn(f"{total}/{total} casos correctos", salida.getvalue())
+        self.assertEqual(salida.getvalue().count("✅"), total)
+
+    def test_un_caso_incorrecto_se_marca_con_x(self):
+        malo = dict(sistema.CASOS_PRUEBA[0], principal="R13")
+        casos = [malo] + sistema.CASOS_PRUEBA[1:]
+        salida = io.StringIO()
+        with mock.patch.object(sistema, "CASOS_PRUEBA", casos), \
+                redirect_stdout(salida):
+            codigo = sistema.ejecutar_casos_prueba()
+        self.assertEqual(codigo, 1)
+        self.assertIn("❌ Caso A", salida.getvalue())
+        self.assertIn(f"{len(casos) - 1}/{len(casos)} casos correctos",
+                      salida.getvalue())
+
+    def test_argumento_desconocido_muestra_uso(self):
+        salida = io.StringIO()
+        with redirect_stdout(salida):
+            codigo = sistema.main(["--otra-cosa"])
+        self.assertEqual(codigo, 2)
+        self.assertIn("--pruebas", salida.getvalue())
+
+    def test_validacion_detecta_caso_con_tecla_invalida(self):
+        malo = dict(sistema.CASOS_PRUEBA[0], teclas=["9"] * 7)
+        with mock.patch.object(sistema, "CASOS_PRUEBA", [malo]):
+            with self.assertRaisesRegex(sistema.BaseConocimientoInvalida,
+                                        "Caso A"):
+                sistema.validar_base_conocimiento()
 
 
 class TestEntradas(unittest.TestCase):
@@ -355,9 +435,9 @@ class TestHistorial(unittest.TestCase):
 
     def test_csv_se_escribe(self):
         resultado_c = sistema.resolver_consulta(respuestas_desde_teclas(
-            CASOS["c_jardin_sol_bajura_flores"]["teclas"]))
+            CASOS["C"]["teclas"]))
         resultado_g = sistema.resolver_consulta(respuestas_desde_teclas(
-            CASOS["g_interior_poca_luz_flores_sin_conclusion"]["teclas"]))
+            CASOS["G"]["teclas"]))
         with tempfile.TemporaryDirectory() as carpeta:
             ruta = os.path.join(carpeta, "historial.csv")
             self.assertTrue(sistema.guardar_historial(resultado_c, ruta))
@@ -384,12 +464,12 @@ class TestProgramaPrincipal(unittest.TestCase):
                                   os.path.join(carpeta, "h.csv")), \
                 mock.patch("builtins.input", side_effect=entradas), \
                 redirect_stdout(salida):
-            codigo = sistema.main()
+            codigo = sistema.main([])
         return codigo, salida.getvalue()
 
     def test_dos_consultas_completas(self):
-        entradas = (CASOS["c_jardin_sol_bajura_flores"]["teclas"] + ["s"]
-                    + CASOS["g_interior_poca_luz_flores_sin_conclusion"]
+        entradas = (CASOS["C"]["teclas"] + ["s"]
+                    + CASOS["G"]
                     ["teclas"] + ["n"])
         codigo, texto = self.ejecutar_main(entradas)
         self.assertEqual(codigo, 0)

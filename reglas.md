@@ -2,10 +2,10 @@
 
 > Documento **generado automáticamente** desde `loria_james_tarea1.py` con `python generar_reglas.py`. No se edita a mano: los ids son los mismos del código.
 
-- Reglas: **32** (11 intermedias + 21 finales)
+- Reglas: **33** (11 intermedias + 22 finales)
 - Preguntas: **7**
-- Conclusiones finales distintas: **21**
-- Plantas en el catálogo: **31**
+- Conclusiones finales distintas: **22**
+- Plantas en el catálogo: **30**
 
 ## 1. Preguntas al usuario
 
@@ -70,7 +70,8 @@ Los deducen las reglas intermedias; el usuario no los responde.
 | R29 | **SI** ambiente = exterior con sol **Y** tiempo de cuidado = poco **ENTONCES** recomendar: Echeveria | 80 % |
 | R30 | **SI** ambiente = exterior con sol **Y** tiempo de cuidado = poco **Y** restricción = ninguna **ENTONCES** recomendar: Sábila, Lengua de suegra | 85 % |
 | R31 | **SI** ambiente = exterior con sombra **Y** clima = templado **Y** objetivo = flores **Y** nivel = avanzado **ENTONCES** recomendar: Guaria morada | 75 % |
-| R32 | **SI** ambiente = exterior con sombra **Y** objetivo = cerca viva **Y** clima = cálido o templado **ENTONCES** recomendar: Caña india, Palma areca | 75 % |
+| R32 | **SI** ambiente = exterior con sombra **Y** objetivo = cerca viva **Y** clima = cálido o templado **Y** restricción = ninguna **ENTONCES** recomendar: Caña india, Palma areca | 75 % |
+| R33 | **SI** ambiente = exterior con sombra **Y** objetivo = cerca viva **Y** clima = cálido o templado **ENTONCES** recomendar: Palma areca | 75 % |
 
 Orden de las recomendaciones: mayor certeza; si empatan, la regla con más condiciones (una lista de valores cuenta como una sola condición); si siguen empatadas, el id menor.
 
@@ -78,7 +79,6 @@ Orden de las recomendaciones: mayor certeza; si empatan, la regla con más condi
 
 - Por regla general, las reglas que concluyen plantas **tóxicas** exigen `restriccion = ninguna`. Así la explicación deja claro por qué no aplican cuando hay mascotas o niños.
 - Las reglas cuyas plantas son solo **seguras** o **sin registro** no llevan esa condición: sirven para cualquier hogar.
-- Excepción a propósito: R32 mezcla plantas tóxicas y seguras sin condición de restricción. Con mascotas, el filtro de seguridad quita las tóxicas y conserva las demás.
 - Después de evaluar, un **filtro de seguridad** revisa planta por planta contra el catálogo (defensa en profundidad):
   - con mascotas: elimina las tóxicas y marca en amarillo las sin registro (*⚠ Sin registro de toxicidad en ASPCA; consulte a un veterinario.*); si una conclusión queda vacía, se descarta;
   - sin mascotas: marca en rojo las tóxicas (*⚠ Tóxica para mascotas*).
@@ -106,7 +106,7 @@ Fuente de toxicidad: ASPCA, base de datos de plantas tóxicas y no tóxicas (con
 | mala_madre | Mala madre | *Chlorophytum comosum* | segura | Ideal colgante; sus hijos se propagan fácil. | R13 |
 | peperomia | Peperomia | *Peperomia spp.* | segura | Riego moderado; sus hojas carnosas guardan agua. | R13 |
 | palma_salon | Palma de salón | *Chamaedorea elegans* | segura | Tolera poca luz; mantenga el sustrato apenas húmedo. | R13 |
-| areca | Palma areca | *Dypsis lutescens* | segura | Al aire libre tolera sol si se riega bien; en interior prefiere luz indirecta brillante. | R15, R22, R32 |
+| areca | Palma areca | *Dypsis lutescens* | segura | Al aire libre tolera sol si se riega bien; en interior prefiere luz indirecta brillante. | R15, R22, R32, R33 |
 | helecho | Helecho | *Nephrolepis exaltata* | segura | Humedad constante; ideal en baños o corredores. | R15, R27 |
 | calatea | Calatea | *Calathea spp.* | segura | Humedad alta y agua sin cloro; enrolla las hojas si le falta agua. | R15, R27 |
 | phalaenopsis | Orquídea mariposa | *Phalaenopsis spp.* | segura | Riego semanal en corteza; luz indirecta. | R17 |
@@ -116,7 +116,6 @@ Fuente de toxicidad: ASPCA, base de datos de plantas tóxicas y no tóxicas (con
 | chinas | Chinas | *Impatiens walleriana* | segura | Semisombra y riego frecuente; no tolera sol fuerte. | R25 |
 | rosa | Rosa | *Rosa spp.* | segura | Pleno sol y poda tras cada floración; cuidado con las espinas. | R23 |
 | echeveria | Echeveria | *Echeveria spp.* | segura | Sustrato muy drenado; protéjala de la lluvia directa. | R29 |
-| haworthia | Haworthia | *Haworthia spp.* | segura | Luz brillante sin sol fuerte; riego escaso. | (ninguna) |
 | veranera | Veranera | *Bougainvillea spp.* | sin_registro | Florece más con poco riego y pleno sol; cuidado con las espinas y la savia. | R18, R19 |
 | mono_senora | Moño de señora | *Mussaenda erythrophylla* | sin_registro | Sol o semisombra; se propaga fácil por esquejes. | R18, R19 |
 | heliconia | Platanilla / heliconia | *Heliconia spp.* | sin_registro | Semisombra, suelo húmedo y rico en materia orgánica. | R26 |
