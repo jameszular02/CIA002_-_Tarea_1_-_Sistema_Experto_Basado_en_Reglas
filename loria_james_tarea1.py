@@ -680,19 +680,321 @@ def validar_base_conocimiento():
 # =============================================================================
 # 6. Explicación y salida
 # =============================================================================
-# (En construcción.)
+
+AVISO_INICIAL = (
+    "Aviso: estas son recomendaciones generales para plantas ornamentales "
+    "del hogar.\nLa toxicidad se basa en la base de datos de ASPCA "
+    "(consulta: 9 nov 2026).\nAnte una ingestión, consulte a un veterinario "
+    "o a un médico.")
+AVISO_TOXICA = "⚠ Tóxica para mascotas"
+AVISO_SIN_REGISTRO = ("⚠ Sin registro de toxicidad en ASPCA; consulte a un "
+                      "veterinario.")
+SUGERENCIA_GENERAL = ("Pruebe con otra ubicación, otro tipo de luz u otro "
+                      "objetivo, o consulte en un vivero de su zona.")
+LINEA = "=" * 70
+
+
+def mostrar_bienvenida():
+    """Muestra el título del sistema y el aviso inicial."""
+    print(color(LINEA, CIAN))
+    print(color("  Recomendador de plantas ornamentales para hogares "
+                "costarricenses", NEGRITA, VERDE))
+    print(color(LINEA, CIAN))
+    print(color(AVISO_INICIAL, AMARILLO))
+
+
+def describir_hecho(clave, hechos, origen):
+    """Devuelve "clave = valor" y, si lo dedujo una regla, "[de Rn]".
+
+    La marca [de Rn] es la parte de encadenamiento de la explicación: deja
+    ver qué regla intermedia produjo el hecho que usa otra regla.
+    """
+    texto = f"{clave} = {hechos[clave]}"
+    if origen.get(clave, "usuario") != "usuario":
+        texto += f" [de {origen[clave]}]"
+    return texto
+
+
+def reglas_excluidas_por_restriccion(hechos):
+    """Reglas finales que solo fallaron por la restricción de mascotas.
+
+    Son reglas cuyas demás condiciones se cumplen, pero exigen
+    restriccion = ninguna. Mostrarlas explica por qué no se recomiendan
+    ciertas plantas tóxicas cuando hay mascotas o niños.
+    """
+    excluidas = []
+    for regla in REGLAS:
+        if regla["tipo"] != "final" or "restriccion" not in regla["si"]:
+            continue
+        resto = {k: v for k, v in regla["si"].items() if k != "restriccion"}
+        if (cumple_condiciones(resto, hechos)
+                and not cumple_condiciones(regla["si"], hechos)):
+            excluidas.append(regla)
+    return excluidas
+
+
+def explicar(resultado):
+    """Arma la explicación al estilo MYCIN como una lista de líneas.
+
+    Incluye, en orden: las reglas intermedias que se activaron (con las
+    respuestas que las provocaron), las reglas finales activadas (con los
+    hechos que usaron y de qué regla salió cada uno), las plantas que quitó
+    el filtro de seguridad y las reglas que la restricción dejó por fuera.
+    Devuelve texto sin imprimir para poder probarlo y reutilizarlo.
+    """
+    hechos, origen = resultado["hechos"], resultado["origen"]
+    lineas = []
+    for regla in resultado["intermedias"]:
+        causas = " y ".join(describir_hecho(clave, hechos, origen)
+                            for clave in regla["si"])
+        clave, valor = regla["entonces"]
+        lineas.append(f"Se activó {regla['id']} porque: {causas} → "
+                      f"{clave} = {valor}")
+    for recomendacion in resultado["recomendaciones"]:
+        regla = recomendacion["regla"]
+        causas = ", ".join(describir_hecho(clave, hechos, origen)
+                           for clave in regla["si"])
+        lineas.append(f"Se activó {regla['id']} ({regla['certeza']}%) "
+                      f"porque: {causas}")
+        if recomendacion["excluidas"]:
+            nombres = ", ".join(PLANTAS_POR_ID[p]["nombre"]
+                                for p in recomendacion["excluidas"])
+            lineas.append(f"El filtro de seguridad quitó de {regla['id']}: "
+                          f"{nombres} (tóxica según ASPCA)")
+    for regla in reglas_excluidas_por_restriccion(hechos):
+        lineas.append(f"No se aplicó {regla['id']}: exige restriccion = "
+                      f"ninguna, pero "
+                      f"{describir_hecho('restriccion', hechos, origen)}")
+    return lineas
+
+
+def formatear_planta(id_planta, aviso, con_tip=True):
+    """Línea de una planta, con su aviso de toxicidad debajo si corresponde."""
+    planta = PLANTAS_POR_ID[id_planta]
+    linea = f"{color(planta['nombre'], NEGRITA)} ({planta['cientifico']})"
+    if con_tip:
+        linea += f" — {planta['tip']}"
+    if aviso == "toxica":
+        linea += "\n      " + color(AVISO_TOXICA, ROJO)
+    elif aviso == "sin_registro":
+        linea += "\n      " + color(AVISO_SIN_REGISTRO, AMARILLO)
+    return linea
+
+
+def mostrar_recomendacion(resultado):
+    """Imprime la recomendación principal, las alternativas y el porqué.
+
+    La principal es la primera de la lista (ya viene ordenada por certeza).
+    Si no hay recomendación, lo dice con claridad, muestra los hechos que sí
+    se dedujeron y da una sugerencia, sin inventar nada.
+    """
+    print()
+    print(color(LINEA, CIAN))
+    recomendaciones = resultado["recomendaciones"]
+    explicacion = explicar(resultado)
+
+    if not recomendaciones:
+        print(color("Sin conclusión: ninguna regla de la base de conocimiento "
+                    "cubre esta combinación de respuestas.", AMARILLO, NEGRITA))
+        print("El sistema prefiere decirlo antes que inventar una "
+              "recomendación.")
+        print(color("Hechos derivados que sí se obtuvieron (¿por qué?):",
+                    CIAN, NEGRITA))
+        for linea in explicacion:
+            print(f"  - {linea}")
+        hueco = resultado["hueco"]
+        if hueco:
+            print(color(f"Sugerencia (hueco conocido {hueco['id']}):", CIAN,
+                        NEGRITA))
+            print(f"  {hueco['mensaje']}")
+        else:
+            print(color("Sugerencia:", CIAN, NEGRITA))
+            print(f"  {SUGERENCIA_GENERAL}")
+        print(color(LINEA, CIAN))
+        return
+
+    principal = recomendaciones[0]
+    regla = principal["regla"]
+    print(color(f"Recomendación principal ({regla['id']}, certeza "
+                f"{regla['certeza']}%):", VERDE, NEGRITA))
+    for id_planta, aviso in principal["plantas"]:
+        print(f"  • {formatear_planta(id_planta, aviso)}")
+
+    if len(recomendaciones) > 1:
+        print(color("Alternativas:", CIAN, NEGRITA))
+        for numero, alternativa in enumerate(recomendaciones[1:], start=2):
+            regla = alternativa["regla"]
+            print(f"  {numero}. {regla['id']} (certeza {regla['certeza']}%):")
+            for id_planta, aviso in alternativa["plantas"]:
+                print(f"     • {formatear_planta(id_planta, aviso, False)}")
+
+    print(color("¿Por qué?", CIAN, NEGRITA))
+    for linea in explicacion:
+        print(f"  - {linea}")
+    print(color(LINEA, CIAN))
 
 
 # =============================================================================
 # 7. Historial
 # =============================================================================
-# (En construcción.)
+
+ENCABEZADO_HISTORIAL = ["fecha_hora", "respuestas", "hechos_derivados",
+                        "reglas_activadas", "recomendacion_principal"]
+
+
+def resumir_principal(resultado):
+    """Texto corto de la recomendación principal para el historial."""
+    if resultado["recomendaciones"]:
+        principal = resultado["recomendaciones"][0]
+        nombres = ", ".join(PLANTAS_POR_ID[p]["nombre"]
+                            for p, _ in principal["plantas"])
+        return (f"{principal['regla']['id']} "
+                f"({principal['regla']['certeza']}%): {nombres}")
+    if resultado["hueco"]:
+        return f"Sin conclusión ({resultado['hueco']['id']})"
+    return "Sin conclusión"
+
+
+def guardar_historial(resultado, archivo=None):
+    """Agrega la consulta al historial CSV usando el módulo csv.
+
+    Si el archivo no existe (o está vacío) escribe primero el encabezado.
+    Si no se puede escribir (por ejemplo, por permisos), avisa y devuelve
+    False en lugar de cerrar el programa: el historial es un extra y no
+    debe impedir la consulta.
+    """
+    if archivo is None:
+        archivo = ARCHIVO_HISTORIAL      # se lee aquí para poder cambiarlo
+    hechos, origen = resultado["hechos"], resultado["origen"]
+    derivados = {k: v for k, v in hechos.items() if origen[k] != "usuario"}
+    reglas = ([r["id"] for r in resultado["intermedias"]]
+              + [rec["regla"]["id"] for rec in resultado["recomendaciones"]])
+    fila = [
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "; ".join(f"{k}={v}" for k, v in resultado["respuestas"].items()),
+        "; ".join(f"{k}={v}" for k, v in derivados.items()),
+        " ".join(reglas),
+        resumir_principal(resultado),
+    ]
+    try:
+        es_nuevo = (not os.path.exists(archivo)
+                    or os.path.getsize(archivo) == 0)
+        with open(archivo, "a", newline="", encoding="utf-8") as salida:
+            escritor = csv.writer(salida)
+            if es_nuevo:
+                escritor.writerow(ENCABEZADO_HISTORIAL)
+            escritor.writerow(fila)
+    except OSError as error:
+        print(color(f"No se pudo guardar el historial: {error}", AMARILLO))
+        return False
+    return True
 
 
 # =============================================================================
 # 8. Programa principal
 # =============================================================================
 
+def interpretar_si_no(texto):
+    """Convierte s, si, sí, n o no en "s" o "n". Otra cosa devuelve None."""
+    texto = texto.strip().lower()
+    if texto in ("s", "si", "sí"):
+        return "s"
+    if texto in ("n", "no"):
+        return "n"
+    return None
+
+
+def avisar_error(mensaje):
+    """Muestra un error de entrada en rojo, sin cerrar el programa."""
+    print(color(f"  ✗ {mensaje}", ROJO))
+
+
+def preguntar_si_no(mensaje):
+    """Pregunta s/n y repite hasta recibir una respuesta válida."""
+    while True:
+        respuesta = input(mensaje)
+        valor = interpretar_si_no(respuesta)
+        if valor:
+            return valor
+        if not respuesta.strip():
+            avisar_error("No escribió nada. Responda s o n.")
+        else:
+            avisar_error(f"«{respuesta.strip()}» no es válido. "
+                         f"Responda s o n.")
+
+
+def preguntar(pregunta, numero=None, total=None):
+    """Hace una pregunta de la base de conocimiento y valida la respuesta.
+
+    Para un menú acepta solo el número de una opción existente; para una
+    pregunta s/n acepta s o n. Ante una respuesta vacía, con letras o fuera
+    de rango, explica el error y vuelve a preguntar (nunca se cierra).
+    Devuelve el valor interno de la opción elegida.
+    """
+    print()
+    prefijo = f"Pregunta {numero} de {total} · " if numero else ""
+    opciones = pregunta["opciones"]
+
+    if pregunta["tipo"] == "sn":
+        print(color(f"{prefijo}{pregunta['texto']} (s/n)", CIAN, NEGRITA))
+        return preguntar_si_no("Responda s o n: ")
+
+    print(color(f"{prefijo}{pregunta['texto']}", CIAN, NEGRITA))
+    for indice, (_, texto) in enumerate(opciones, start=1):
+        print(f"  {indice}. {texto}")
+    while True:
+        respuesta = input(f"Elija una opción (1-{len(opciones)}): ").strip()
+        if not respuesta:
+            avisar_error("No escribió nada. Escriba el número de una opción.")
+        elif not respuesta.isdecimal():
+            avisar_error(f"«{respuesta}» no es un número. Escriba solo el "
+                         f"número de la opción.")
+        elif not 1 <= int(respuesta) <= len(opciones):
+            avisar_error(f"La opción {respuesta} no existe. Elija entre 1 y "
+                         f"{len(opciones)}.")
+        else:
+            return opciones[int(respuesta) - 1][0]
+
+
+def recolectar_hechos():
+    """Hace todas las preguntas en orden y devuelve {clave: valor}."""
+    respuestas = {}
+    for numero, pregunta in enumerate(PREGUNTAS, start=1):
+        respuestas[pregunta["clave"]] = preguntar(pregunta, numero,
+                                                  len(PREGUNTAS))
+    return respuestas
+
+
+def main():
+    """Ciclo principal: validar, preguntar, inferir, explicar y repetir.
+
+    Devuelve el código de salida del programa (0 si todo salió bien).
+    """
+    try:
+        validar_base_conocimiento()
+    except BaseConocimientoInvalida as error:
+        print(color(str(error), ROJO))
+        return 1
+
+    mostrar_bienvenida()
+    try:
+        while True:
+            respuestas = recolectar_hechos()
+            resultado = resolver_consulta(respuestas)
+            mostrar_recomendacion(resultado)
+            if guardar_historial(resultado):
+                print(f"(Consulta guardada en {ARCHIVO_HISTORIAL})")
+            print()
+            if preguntar_si_no("¿Desea hacer otra consulta? (s/n): ") == "n":
+                break
+    except (KeyboardInterrupt, EOFError):
+        # Ctrl+C o fin de la entrada: se sale sin mostrar un error de Python.
+        print("\n" + color("Consulta interrumpida. ¡Hasta pronto!", AMARILLO))
+        return 0
+
+    print(color("Gracias por usar el recomendador. ¡Pura vida!", VERDE))
+    return 0
+
+
 if __name__ == "__main__":
-    validar_base_conocimiento()
-    print("Base de conocimiento válida. Interfaz en construcción.")
+    sys.exit(main())
