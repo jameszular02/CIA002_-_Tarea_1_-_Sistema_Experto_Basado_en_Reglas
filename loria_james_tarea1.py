@@ -127,7 +127,8 @@ CATALOGO = [
      "tip": "Tolera poca luz; mantenga el sustrato apenas húmedo."},
     {"id": "areca", "nombre": "Palma areca", "cientifico": "Dypsis lutescens",
      "toxicidad": "segura",
-     "tip": "Luz indirecta brillante; las puntas cafés indican aire seco."},
+     "tip": "Al aire libre tolera sol si se riega bien; en interior prefiere "
+            "luz indirecta brillante."},
     {"id": "helecho", "nombre": "Helecho",
      "cientifico": "Nephrolepis exaltata", "toxicidad": "segura",
      "tip": "Humedad constante; ideal en baños o corredores."},
@@ -274,9 +275,16 @@ HECHOS_DERIVADOS = {
 #   - Las reglas que solo concluyen plantas "segura" o "sin_registro" no
 #     llevan esa condición: sirven para cualquier hogar. El filtro de
 #     seguridad (sección 5) igual revisa cada planta y agrega los avisos.
+#   - Excepción a propósito: R32 mezcla una planta tóxica (caña india) con
+#     una segura (palma areca) y no lleva la condición. Con mascotas, el
+#     filtro de seguridad quita la caña india y conserva la areca.
 
 EXTERIOR = ["balcon_terraza", "jardin"]
 CALIDO_O_TEMPLADO = ["calido", "templado"]
+# Dentro de la casa, la "semisombra" equivale a una luz indirecta media: por
+# eso las reglas de interior que aceptan luz indirecta también la aceptan.
+LUZ_INTERIOR_MEDIA = ["luz_indirecta", "semisombra"]
+LUZ_INTERIOR_SUAVE = ["poca_luz", "luz_indirecta", "semisombra"]
 
 REGLAS = [
     # --- Reglas intermedias: traducen respuestas en hechos ------------------
@@ -310,28 +318,28 @@ REGLAS = [
 
     # --- Reglas finales: interior -------------------------------------------
     {"id": "R12", "tipo": "final", "certeza": 90,
-     "si": {"ambiente": "interior", "luz": ["poca_luz", "luz_indirecta"],
+     "si": {"ambiente": "interior", "luz": LUZ_INTERIOR_SUAVE,
             "restriccion": "ninguna", "objetivo": "follaje"},
      "entonces": ["lengua_suegra", "zamioculca", "telefono"]},
     {"id": "R13", "tipo": "final", "certeza": 85,
-     "si": {"ambiente": "interior", "luz": ["poca_luz", "luz_indirecta"],
+     "si": {"ambiente": "interior", "luz": LUZ_INTERIOR_SUAVE,
             "objetivo": "follaje"},
      "entonces": ["mala_madre", "peperomia", "palma_salon"]},
     {"id": "R14", "tipo": "final", "certeza": 80,
-     "si": {"ambiente": "interior", "luz": "luz_indirecta",
+     "si": {"ambiente": "interior", "luz": LUZ_INTERIOR_MEDIA,
             "nivel": "avanzado", "restriccion": "ninguna",
             "objetivo": "follaje"},
      "entonces": ["mano_tigre"]},
     {"id": "R15", "tipo": "final", "certeza": 80,
-     "si": {"ambiente": "interior", "luz": "luz_indirecta",
+     "si": {"ambiente": "interior", "luz": LUZ_INTERIOR_MEDIA,
             "nivel": "avanzado", "objetivo": "follaje"},
      "entonces": ["calatea", "helecho", "areca"]},
     {"id": "R16", "tipo": "final", "certeza": 85,
-     "si": {"ambiente": "interior", "luz": "luz_indirecta",
+     "si": {"ambiente": "interior", "luz": LUZ_INTERIOR_MEDIA,
             "restriccion": "ninguna", "objetivo": "flores"},
      "entonces": ["cuna_moises", "anturio"]},
     {"id": "R17", "tipo": "final", "certeza": 80,
-     "si": {"ambiente": "interior", "luz": "luz_indirecta",
+     "si": {"ambiente": "interior", "luz": LUZ_INTERIOR_MEDIA,
             "objetivo": "flores"},
      "entonces": ["phalaenopsis", "bromelia"]},
 
@@ -384,7 +392,7 @@ REGLAS = [
     # --- Reglas finales: bajo mantenimiento y especiales ---------------------
     {"id": "R29", "tipo": "final", "certeza": 80,
      "si": {"ambiente": "exterior_sol", "cuidado": "poco"},
-     "entonces": ["echeveria", "haworthia"]},
+     "entonces": ["echeveria"]},
     {"id": "R30", "tipo": "final", "certeza": 85,
      "si": {"ambiente": "exterior_sol", "cuidado": "poco",
             "restriccion": "ninguna"},
@@ -393,6 +401,12 @@ REGLAS = [
      "si": {"ambiente": "exterior_sombra", "clima": "templado",
             "objetivo": "flores", "nivel": "avanzado"},
      "entonces": ["guaria_morada"]},
+    # La caña india "tolera sol y sombra" según su propio consejo; la areca
+    # tolera exterior si se riega bien.
+    {"id": "R32", "tipo": "final", "certeza": 75,
+     "si": {"ambiente": "exterior_sombra", "objetivo": "cerca_viva",
+            "clima": CALIDO_O_TEMPLADO},
+     "entonces": ["cana_india", "areca"]},
 ]
 
 # Huecos conocidos: combinaciones donde el sistema, a propósito, NO recomienda
@@ -413,6 +427,11 @@ HUECOS_CONOCIDOS = [
      "si": {"ambiente": "interior", "luz": "pleno_sol"},
      "mensaje": "El sol directo detrás de un vidrio suele quemar las plantas "
                 "de interior. Pruebe con un lugar de luz indirecta."},
+    {"id": "H4",
+     "si": {"ambiente": "exterior_sombra", "objetivo": "cerca_viva"},
+     "mensaje": "En clima fresco y con sombra, el catálogo no tiene plantas "
+                "de cerca viva. Elija un lugar soleado o busque plantas de "
+                "follaje."},
 ]
 
 

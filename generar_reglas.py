@@ -148,13 +148,23 @@ def generar():
     agregar("")
 
     # --- Restricción y filtro ----------------------------------------------
+    excepciones = [
+        r["id"] for r in finales
+        if "restriccion" not in r["si"]
+        and any(sistema.PLANTAS_POR_ID[p]["toxicidad"] == "toxica"
+                for p in r["entonces"])]
     agregar("## 5. Mascotas: restricción y filtro de seguridad")
     agregar("")
-    agregar("- Las reglas que concluyen al menos una planta **tóxica** exigen "
-            "`restriccion = ninguna`. Así la explicación deja claro por qué no "
-            "aplican cuando hay mascotas o niños.")
+    agregar("- Por regla general, las reglas que concluyen plantas **tóxicas** "
+            "exigen `restriccion = ninguna`. Así la explicación deja claro por "
+            "qué no aplican cuando hay mascotas o niños.")
     agregar("- Las reglas cuyas plantas son solo **seguras** o **sin "
             "registro** no llevan esa condición: sirven para cualquier hogar.")
+    if excepciones:
+        agregar(f"- Excepción a propósito: {', '.join(excepciones)} mezcla "
+                "plantas tóxicas y seguras sin condición de restricción. Con "
+                "mascotas, el filtro de seguridad quita las tóxicas y conserva "
+                "las demás.")
     agregar("- Después de evaluar, un **filtro de seguridad** revisa planta "
             "por planta contra el catálogo (defensa en profundidad):")
     agregar("  - con mascotas: elimina las tóxicas y marca en amarillo las "
@@ -164,19 +174,38 @@ def generar():
             "mascotas*).")
     agregar("")
 
-    # --- Huecos y cobertura ------------------------------------------------
+    # --- Catálogo ----------------------------------------------------------
+    agregar("## 6. Catálogo de plantas")
+    agregar("")
+    agregar("Fuente de toxicidad: ASPCA, base de datos de plantas tóxicas y no "
+            "tóxicas (consulta: 9 nov 2026). La guaria morada no aparece por "
+            "nombre; se trata como segura por género, porque ASPCA lista "
+            "varias *Cattleya* (C. mossiae, C. trianaei, C. labiata) como no "
+            "tóxicas.")
+    agregar("")
+    agregar("| Id | Nombre | Nombre científico | Toxicidad | Consejo | "
+            "Reglas que la recomiendan |")
+    agregar("|---|---|---|---|---|---|")
+    for planta in sistema.CATALOGO:
+        usos = [r["id"] for r in finales if planta["id"] in r["entonces"]]
+        agregar(f"| {planta['id']} | {planta['nombre']} | "
+                f"*{planta['cientifico']}* | {planta['toxicidad']} | "
+                f"{planta['tip']} | {', '.join(usos) or '(ninguna)'} |")
+    agregar("")
+
+    # --- Huecos conocidos y cobertura ---------------------------------------
     resumen = cobertura.calcular_cobertura()
     total = resumen["total"]
     en_hueco = sum(resumen["en_hueco"].values())
     sin_cubrir = len(resumen["sin_cubrir"])
 
-    agregar("## 6. Casos sin conclusión")
+    agregar("## 7. Huecos conocidos y cobertura")
     agregar("")
     agregar("Cuando ninguna regla final aplica, el sistema lo dice con "
             "claridad, muestra los hechos que sí dedujo y da una sugerencia. "
             "Nunca inventa una recomendación.")
     agregar("")
-    agregar("### 6.1 Huecos conocidos (con sugerencia específica)")
+    agregar("### 7.1 Huecos conocidos (con sugerencia específica)")
     agregar("")
     agregar("| Id | Condiciones | Sugerencia | Combinaciones |")
     agregar("|---|---|---|---|")
@@ -184,25 +213,31 @@ def generar():
         agregar(f"| {hueco['id']} | {texto_condiciones(hueco['si'])} | "
                 f"{hueco['mensaje']} | {resumen['en_hueco'][hueco['id']]} |")
     agregar("")
-    agregar("### 6.2 Cobertura (`python cobertura.py`)")
+    agregar("Un hueco solo se muestra si ninguna regla final aplicó.")
+    agregar("")
+    agregar("### 7.2 Cobertura (`python cobertura.py`)")
     agregar("")
     agregar(f"Se recorrieron las **{total}** combinaciones posibles de "
             f"respuestas con el mismo motor del programa:")
     agregar("")
     agregar("| Resultado | Combinaciones | % |")
     agregar("|---|---|---|")
-    agregar(f"| Con recomendación | {resumen['con_recomendacion']} | "
-            f"{cobertura.porcentaje(resumen['con_recomendacion'], total)} |")
+    agregar(f"| **Con recomendación** | {resumen['con_recomendacion']} | "
+            f"**{cobertura.porcentaje(resumen['con_recomendacion'], total)}** |")
     agregar(f"| Hueco conocido (sugerencia específica) | {en_hueco} | "
             f"{cobertura.porcentaje(en_hueco, total)} |")
     agregar(f"| Sin cubrir (mensaje general) | {sin_cubrir} | "
             f"{cobertura.porcentaje(sin_cubrir, total)} |")
     agregar("")
-    agregar("### 6.3 Limitación: grupos sin cubrir")
+    agregar("### 7.3 Limitación: grupos sin cubrir")
     agregar("")
     if not resumen["sin_cubrir"]:
         agregar("No quedan combinaciones sin cubrir.")
     else:
+        agregar("El catálogo no tiene una planta de follaje para estos casos, "
+                "así que el sistema responde con el mensaje general en lugar "
+                "de inventar una recomendación.")
+        agregar("")
         agregar("| # | Patrón | Casos | Ejemplo de respuestas |")
         agregar("|---|---|---|---|")
         for numero, grupo in enumerate(
@@ -217,23 +252,6 @@ def generar():
                 grupo["casos"][0]["respuestas"])
             agregar(f"| {numero} | {'; '.join(rasgos)} | "
                     f"{len(grupo['casos'])} | `{ejemplo}` |")
-    agregar("")
-
-    # --- Catálogo ----------------------------------------------------------
-    agregar("## 7. Catálogo de plantas")
-    agregar("")
-    agregar("Fuente de toxicidad: ASPCA, base de datos de plantas tóxicas y no "
-            "tóxicas (consulta: 9 nov 2026). La guaria morada no aparece por "
-            "nombre; se trata como segura por género, porque ASPCA lista "
-            "varias *Cattleya* (C. mossiae, C. trianaei, C. labiata) como no "
-            "tóxicas.")
-    agregar("")
-    agregar("| Id | Nombre | Nombre científico | Toxicidad | Consejo |")
-    agregar("|---|---|---|---|---|")
-    for planta in sistema.CATALOGO:
-        agregar(f"| {planta['id']} | {planta['nombre']} | "
-                f"*{planta['cientifico']}* | {planta['toxicidad']} | "
-                f"{planta['tip']} |")
     agregar("")
     return "\n".join(lineas)
 
