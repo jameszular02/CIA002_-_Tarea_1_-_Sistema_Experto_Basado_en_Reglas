@@ -37,12 +37,12 @@ preguntas (desplazándose hacia arriba) y otra con la recomendación y el
 |---|---|---|---|
 | 1 | A | `2` `1` `4` `2` `n` `2` `1` | «Recomendación principal (R12, certeza 90%)», avisos rojos de tóxicas, alternativa R13 |
 | 2 | B | `2` `1` `3` `2` `s` `2` `1` | R13 sin plantas tóxicas y la línea «No se aplicó R12…» |
-| 3 | C | `1` `3` `1` `2` `n` `1` `1` | R18 (90 %), alternativa R19 y la explicación con `[de R5]`, `[de R1]`, `[de R8]` |
+| 3 | C | `1` `3` `1` `2` `n` `1` `1` | R18 (90 %), alternativa R19 solo con hibisco y la explicación con `[de R5]`, `[de R1]`, `[de R8]` |
 | 4 | D | `3` `3` `2` `2` `n` `1` `1` | R24 (85 %) y alternativa R25 |
 | 5 | E | `2` `2` `1` `1` `s` `2` `1` | R29 (80 %) con echeveria y «No se aplicó R20 / R30» |
 | 6 | F | `1` `3` `2` `2` `s` `1` `1` | R26 con el aviso amarillo «⚠ Sin registro de toxicidad en ASPCA…» |
 | 7 | G | `2` `1` `4` `2` `n` `1` `1` | «Sin conclusión», hechos derivados y «Sugerencia (hueco conocido H1)» |
-| 8 | H | `1` `3` `2` `2` `s` `3` `2` | R32 solo con palma areca y «El filtro de seguridad quitó de R32: Caña india» |
+| 8 | H | `1` `3` `2` `2` `s` `3` `2` | R33 solo con palma areca y «No se aplicó R32…» |
 | 9 | I | `3` `2` `1` `2` `n` `2` `1` | «Sin conclusión» con la sugerencia general |
 
 Los casos A, B, C, D y G cubren los 5 casos que pide el enunciado (G es el
@@ -79,9 +79,18 @@ cat historial_consultas.csv
 clear && python -m unittest -v
 ```
 
-Capture el final: `Ran 30 tests … OK`.
+Capture el final: `Ran 39 tests … OK`.
 
-**15. Cobertura de la base de conocimiento:**
+**15. Casos de prueba integrados en el programa:**
+
+```bash
+clear && python loria_james_tarea1.py --pruebas
+```
+
+Capture las nueve líneas ✅ y el resumen `9/9 casos correctos`. Esta captura
+es útil porque el modo `--pruebas` va dentro del archivo que se entrega.
+
+**16. Cobertura de la base de conocimiento:**
 
 ```bash
 clear && python cobertura.py
