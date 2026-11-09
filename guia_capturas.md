@@ -6,8 +6,8 @@ teclear. Los resultados esperados están en `casos_prueba.md`.
 
 ## Preparación (una sola vez)
 
-1. Abra el Codespace del repositorio y la terminal (`Ctrl+ñ` en teclado español, `Ctrl+`` ` `` en inglés, o el menú
-   *Terminal → New Terminal*).
+1. Abra el Codespace del repositorio y la terminal: `Ctrl+ñ` en teclado
+   español, ``Ctrl+` `` en teclado inglés, o el menú *Terminal → New Terminal*.
 2. Maximice el panel de la terminal (ícono **^** "Maximize Panel Size").
 3. Si la salida no cabe en pantalla, reduzca la letra con `Ctrl+-` (y vuelva
    a agrandarla con `Ctrl+=` al terminar).
