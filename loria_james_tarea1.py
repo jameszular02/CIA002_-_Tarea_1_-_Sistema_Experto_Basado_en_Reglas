@@ -1,0 +1,679 @@
+# -*- coding: utf-8 -*-
+# =============================================================================
+# Nombre:  James Loria
+# Curso:   CIA02 – Introducción a la IA, UCreativa
+# Tema 3:  Recomendador de plantas ornamentales para hogares costarricenses
+# Fecha:   12 de noviembre de 2026
+# Fuente de toxicidad: ASPCA, base de datos de plantas tóxicas y no tóxicas
+#                      (consulta: 9 nov 2026).
+#
+# Sistema experto basado en reglas (IA simbólica). La base de conocimiento
+# (catálogo, preguntas y reglas) está escrita como DATOS; el motor de
+# inferencia es un conjunto de funciones que recorren esos datos. No hay un
+# "if" por regla: agregar una regla nueva es agregar un diccionario.
+#
+# Uso:  python loria_james_tarea1.py
+# Solo usa la biblioteca estándar de Python (3.10 o superior).
+# =============================================================================
+
+import csv
+import os
+import sys
+from datetime import datetime
+
+
+# =============================================================================
+# 1. Configuración y colores
+# =============================================================================
+
+# Interruptor general: si la terminal no muestra bien los colores, se pone en
+# False y el programa imprime texto plano.
+USAR_COLOR = True
+
+# Códigos de escape ANSI. Funcionan directo en la terminal de Codespaces.
+VERDE = "\033[32m"
+AMARILLO = "\033[33m"
+ROJO = "\033[31m"
+CIAN = "\033[36m"
+NEGRITA = "\033[1m"
+RESET = "\033[0m"
+
+# Archivo donde se guarda el historial de consultas (extra opcional).
+ARCHIVO_HISTORIAL = "historial_consultas.csv"
+
+# Mínimos que exige el enunciado; validar_base_conocimiento() los verifica.
+MINIMO_REGLAS = 20
+MINIMO_PREGUNTAS = 6
+MINIMO_CONCLUSIONES = 5
+
+
+def color(texto, *estilos):
+    """Envuelve un texto con códigos ANSI si USAR_COLOR está activo.
+
+    Se centraliza aquí para que apagar los colores sea cambiar una sola
+    constante y no tocar cada print del programa.
+    """
+    if not USAR_COLOR or not estilos:
+        return texto
+    return "".join(estilos) + texto + RESET
+
+
+# =============================================================================
+# 2. Catálogo de plantas
+# =============================================================================
+# Cada planta es un diccionario. Las reglas finales solo guardan el "id"; el
+# nombre, el nombre científico, la toxicidad y el consejo se buscan aquí. Así
+# un dato de una planta se corrige en un solo lugar.
+#
+# toxicidad:
+#   "segura"       -> ASPCA la lista como no tóxica para perros y gatos.
+#   "toxica"       -> ASPCA la lista como tóxica.
+#   "sin_registro" -> ASPCA no tiene registro; no se asume que sea segura.
+
+CATALOGO = [
+    # --- Plantas que ASPCA registra como tóxicas ---------------------------
+    {"id": "telefono", "nombre": "Teléfono", "cientifico": "Epipremnum aureum",
+     "toxicidad": "toxica",
+     "tip": "Riegue cuando el sustrato esté seco; tolera poca luz."},
+    {"id": "lengua_suegra", "nombre": "Lengua de suegra",
+     "cientifico": "Sansevieria trifasciata", "toxicidad": "toxica",
+     "tip": "Riegue cada 2–3 semanas; el exceso de agua pudre la raíz."},
+    {"id": "zamioculca", "nombre": "Zamioculca",
+     "cientifico": "Zamioculcas zamiifolia", "toxicidad": "toxica",
+     "tip": "Riego escaso; ideal para rincones con poca luz."},
+    {"id": "mano_tigre", "nombre": "Mano de tigre",
+     "cientifico": "Monstera deliciosa", "toxicidad": "toxica",
+     "tip": "Dele un tutor para trepar y luz indirecta brillante."},
+    {"id": "cuna_moises", "nombre": "Cuna de Moisés",
+     "cientifico": "Spathiphyllum spp.", "toxicidad": "toxica",
+     "tip": "Si se marchita está pidiendo agua; florece con luz indirecta."},
+    {"id": "anturio", "nombre": "Anturio", "cientifico": "Anthurium spp.",
+     "toxicidad": "toxica",
+     "tip": "Sustrato aireado y humedad; evite el sol directo."},
+    {"id": "cana_india", "nombre": "Caña india",
+     "cientifico": "Dracaena fragrans", "toxicidad": "toxica",
+     "tip": "Muy resistente; tolera sol y sombra."},
+    {"id": "croton", "nombre": "Crotón", "cientifico": "Codiaeum variegatum",
+     "toxicidad": "toxica",
+     "tip": "A más sol, colores más intensos; su savia irrita la piel."},
+    {"id": "itabo", "nombre": "Itabo", "cientifico": "Yucca guatemalensis",
+     "toxicidad": "toxica",
+     "tip": "Cerca viva casi sin riego; se siembra por estaca."},
+    {"id": "hortensia", "nombre": "Hortensia",
+     "cientifico": "Hydrangea macrophylla", "toxicidad": "toxica",
+     "tip": "Semisombra y suelo húmedo; el color de la flor depende del pH."},
+    {"id": "azalea", "nombre": "Azalea", "cientifico": "Rhododendron spp.",
+     "toxicidad": "toxica",
+     "tip": "Suelo ácido, semisombra y clima fresco."},
+    {"id": "begonia", "nombre": "Begonia", "cientifico": "Begonia spp.",
+     "toxicidad": "toxica",
+     "tip": "Semisombra; evite mojar las hojas."},
+    {"id": "ave_paraiso", "nombre": "Ave del paraíso",
+     "cientifico": "Strelitzia reginae", "toxicidad": "toxica",
+     "tip": "Pleno sol y riego moderado; tarda en dar su primera flor."},
+    {"id": "sabila", "nombre": "Sábila", "cientifico": "Aloe vera",
+     "toxicidad": "toxica",
+     "tip": "Sol y riego escaso en sustrato arenoso."},
+
+    # --- Plantas que ASPCA registra como no tóxicas -------------------------
+    {"id": "mala_madre", "nombre": "Mala madre",
+     "cientifico": "Chlorophytum comosum", "toxicidad": "segura",
+     "tip": "Ideal colgante; sus hijos se propagan fácil."},
+    {"id": "peperomia", "nombre": "Peperomia", "cientifico": "Peperomia spp.",
+     "toxicidad": "segura",
+     "tip": "Riego moderado; sus hojas carnosas guardan agua."},
+    {"id": "palma_salon", "nombre": "Palma de salón",
+     "cientifico": "Chamaedorea elegans", "toxicidad": "segura",
+     "tip": "Tolera poca luz; mantenga el sustrato apenas húmedo."},
+    {"id": "areca", "nombre": "Palma areca", "cientifico": "Dypsis lutescens",
+     "toxicidad": "segura",
+     "tip": "Luz indirecta brillante; las puntas cafés indican aire seco."},
+    {"id": "helecho", "nombre": "Helecho",
+     "cientifico": "Nephrolepis exaltata", "toxicidad": "segura",
+     "tip": "Humedad constante; ideal en baños o corredores."},
+    {"id": "calatea", "nombre": "Calatea", "cientifico": "Calathea spp.",
+     "toxicidad": "segura",
+     "tip": "Humedad alta y agua sin cloro; enrolla las hojas si le falta agua."},
+    {"id": "phalaenopsis", "nombre": "Orquídea mariposa",
+     "cientifico": "Phalaenopsis spp.", "toxicidad": "segura",
+     "tip": "Riego semanal en corteza; luz indirecta."},
+    {"id": "bromelia", "nombre": "Bromelia",
+     "cientifico": "familia Bromeliaceae", "toxicidad": "segura",
+     "tip": "Cambie el agua del centro cada semana para evitar zancudos."},
+    # Guaria morada: ASPCA no la lista por nombre, pero sí lista varias
+    # Cattleya (C. mossiae, C. trianaei, C. labiata) como no tóxicas. Por
+    # pertenecer al mismo grupo se trata como "segura" por género.
+    {"id": "guaria_morada", "nombre": "Guaria morada",
+     "cientifico": "Guarianthe skinneri", "toxicidad": "segura",
+     "tip": "Amárrela a un tronco con luz filtrada; es la flor nacional."},
+    {"id": "hibisco", "nombre": "Amapola / hibisco",
+     "cientifico": "Hibiscus rosa-sinensis", "toxicidad": "segura",
+     "tip": "Pleno sol y riego regular; se poda para formar seto."},
+    {"id": "chinas", "nombre": "Chinas", "cientifico": "Impatiens walleriana",
+     "toxicidad": "segura",
+     "tip": "Semisombra y riego frecuente; no tolera sol fuerte."},
+    {"id": "rosa", "nombre": "Rosa", "cientifico": "Rosa spp.",
+     "toxicidad": "segura",
+     "tip": "Pleno sol y poda tras cada floración; cuidado con las espinas."},
+    {"id": "echeveria", "nombre": "Echeveria", "cientifico": "Echeveria spp.",
+     "toxicidad": "segura",
+     "tip": "Sustrato muy drenado; protéjala de la lluvia directa."},
+    {"id": "haworthia", "nombre": "Haworthia", "cientifico": "Haworthia spp.",
+     "toxicidad": "segura",
+     "tip": "Luz brillante sin sol fuerte; riego escaso."},
+
+    # --- Plantas sin registro en ASPCA ---------------------------------------
+    {"id": "veranera", "nombre": "Veranera", "cientifico": "Bougainvillea spp.",
+     "toxicidad": "sin_registro",
+     "tip": "Florece más con poco riego y pleno sol; cuidado con las espinas "
+            "y la savia."},
+    {"id": "mono_senora", "nombre": "Moño de señora",
+     "cientifico": "Mussaenda erythrophylla", "toxicidad": "sin_registro",
+     "tip": "Sol o semisombra; se propaga fácil por esquejes."},
+    {"id": "heliconia", "nombre": "Platanilla / heliconia",
+     "cientifico": "Heliconia spp.", "toxicidad": "sin_registro",
+     "tip": "Semisombra, suelo húmedo y rico en materia orgánica."},
+]
+
+# Índice para buscar una planta por su id en tiempo constante.
+PLANTAS_POR_ID = {planta["id"]: planta for planta in CATALOGO}
+
+TOXICIDADES_VALIDAS = ("segura", "toxica", "sin_registro")
+
+
+# =============================================================================
+# 3. Preguntas
+# =============================================================================
+# Cada pregunta define la clave del hecho que produce, el texto que ve el
+# usuario y sus opciones como pares (valor interno, texto visible).
+#   tipo "menu" -> se responde con el número de la opción.
+#   tipo "sn"   -> se responde con s o n.
+
+PREGUNTAS = [
+    {"clave": "zona", "tipo": "menu",
+     "texto": "¿En qué zona vive?",
+     "opciones": [
+         ("bajura_caliente", "Bajura caliente (menos de 800 msnm)"),
+         ("valle_central", "Valle Central (entre 800 y 1500 msnm)"),
+         ("altura_fria", "Zona alta y fría (más de 1500 msnm)"),
+     ]},
+    {"clave": "ubicacion", "tipo": "menu",
+     "texto": "¿Dónde estará la planta?",
+     "opciones": [
+         ("interior", "Dentro de la casa"),
+         ("balcon_terraza", "Balcón o terraza"),
+         ("jardin", "Jardín"),
+     ]},
+    {"clave": "luz", "tipo": "menu",
+     "texto": "¿Cuánta luz recibe ese lugar?",
+     "opciones": [
+         ("pleno_sol", "Pleno sol (sol directo varias horas)"),
+         ("semisombra", "Semisombra (sol solo una parte del día)"),
+         ("luz_indirecta", "Luz indirecta (claridad, sin sol directo)"),
+         ("poca_luz", "Poca luz (rincón oscuro)"),
+     ]},
+    {"clave": "cuidado", "tipo": "menu",
+     "texto": "¿Cuánto tiempo puede dedicarle?",
+     "opciones": [
+         ("poco", "Poco"),
+         ("medio", "Medio"),
+         ("mucho", "Mucho"),
+     ]},
+    {"clave": "mascotas", "tipo": "sn",
+     "texto": "¿Hay mascotas o niños pequeños en casa?",
+     "opciones": [
+         ("s", "Sí"),
+         ("n", "No"),
+     ]},
+    {"clave": "objetivo", "tipo": "menu",
+     "texto": "¿Qué busca?",
+     "opciones": [
+         ("flores", "Flores"),
+         ("follaje", "Follaje (hojas decorativas)"),
+         ("cerca_viva", "Cerca viva"),
+     ]},
+    {"clave": "experiencia", "tipo": "menu",
+     "texto": "¿Cuál es su experiencia con plantas?",
+     "opciones": [
+         ("principiante", "Principiante"),
+         ("con_experiencia", "Con experiencia"),
+     ]},
+]
+
+# Hechos que el usuario NO responde: los deducen las reglas intermedias.
+# Se declaran aquí, con un texto legible para cada valor, para que la
+# validación detecte errores de escritura en las reglas.
+HECHOS_DERIVADOS = {
+    "clima": {"calido": "cálido", "templado": "templado",
+              "fresco": "fresco"},
+    "ambiente": {"interior": "interior",
+                 "exterior_sol": "exterior con sol",
+                 "exterior_sombra": "exterior con sombra"},
+    "restriccion": {"no_toxicas": "solo plantas no tóxicas",
+                    "ninguna": "ninguna"},
+    "nivel": {"facil": "fácil", "avanzado": "avanzado"},
+}
+
+
+# =============================================================================
+# 4. Reglas
+# =============================================================================
+# Formato de cada regla:
+#   "id":        identificador único (R1, R2, ...).
+#   "tipo":      "intermedia" (deduce un hecho nuevo) o "final" (recomienda).
+#   "si":        condiciones {clave: valor}. Si el valor es una LISTA, basta
+#                con que el hecho tenga cualquiera de esos valores. Así una
+#                sola regla cubre varios casos sin duplicarla.
+#   "entonces":  intermedia -> (clave, valor) del hecho nuevo.
+#                final      -> lista de ids del catálogo.
+#   "certeza":   (solo finales) confianza de 0 a 100.
+#
+# Principio de diseño de la restricción por mascotas:
+#   - Las reglas que concluyen plantas tóxicas llevan restriccion = ninguna,
+#     así la explicación deja claro por qué no aplican cuando hay mascotas.
+#   - Las reglas que solo concluyen plantas "segura" o "sin_registro" no
+#     llevan esa condición: sirven para cualquier hogar. El filtro de
+#     seguridad (sección 5) igual revisa cada planta y agrega los avisos.
+
+EXTERIOR = ["balcon_terraza", "jardin"]
+CALIDO_O_TEMPLADO = ["calido", "templado"]
+
+REGLAS = [
+    # --- Reglas intermedias: traducen respuestas en hechos ------------------
+    {"id": "R1", "tipo": "intermedia",
+     "si": {"zona": "bajura_caliente"}, "entonces": ("clima", "calido")},
+    {"id": "R2", "tipo": "intermedia",
+     "si": {"zona": "valle_central"}, "entonces": ("clima", "templado")},
+    {"id": "R3", "tipo": "intermedia",
+     "si": {"zona": "altura_fria"}, "entonces": ("clima", "fresco")},
+    {"id": "R4", "tipo": "intermedia",
+     "si": {"ubicacion": "interior"}, "entonces": ("ambiente", "interior")},
+    {"id": "R5", "tipo": "intermedia",
+     "si": {"ubicacion": EXTERIOR, "luz": "pleno_sol"},
+     "entonces": ("ambiente", "exterior_sol")},
+    {"id": "R6", "tipo": "intermedia",
+     "si": {"ubicacion": EXTERIOR,
+            "luz": ["semisombra", "luz_indirecta", "poca_luz"]},
+     "entonces": ("ambiente", "exterior_sombra")},
+    {"id": "R7", "tipo": "intermedia",
+     "si": {"mascotas": "s"}, "entonces": ("restriccion", "no_toxicas")},
+    {"id": "R8", "tipo": "intermedia",
+     "si": {"mascotas": "n"}, "entonces": ("restriccion", "ninguna")},
+    {"id": "R9", "tipo": "intermedia",
+     "si": {"cuidado": "poco"}, "entonces": ("nivel", "facil")},
+    {"id": "R10", "tipo": "intermedia",
+     "si": {"cuidado": ["medio", "mucho"], "experiencia": "principiante"},
+     "entonces": ("nivel", "facil")},
+    {"id": "R11", "tipo": "intermedia",
+     "si": {"cuidado": ["medio", "mucho"], "experiencia": "con_experiencia"},
+     "entonces": ("nivel", "avanzado")},
+
+    # --- Reglas finales: interior -------------------------------------------
+    {"id": "R12", "tipo": "final", "certeza": 90,
+     "si": {"ambiente": "interior", "luz": ["poca_luz", "luz_indirecta"],
+            "restriccion": "ninguna", "objetivo": "follaje"},
+     "entonces": ["lengua_suegra", "zamioculca", "telefono"]},
+    {"id": "R13", "tipo": "final", "certeza": 85,
+     "si": {"ambiente": "interior", "luz": ["poca_luz", "luz_indirecta"],
+            "objetivo": "follaje"},
+     "entonces": ["mala_madre", "peperomia", "palma_salon"]},
+    {"id": "R14", "tipo": "final", "certeza": 80,
+     "si": {"ambiente": "interior", "luz": "luz_indirecta",
+            "nivel": "avanzado", "restriccion": "ninguna",
+            "objetivo": "follaje"},
+     "entonces": ["mano_tigre"]},
+    {"id": "R15", "tipo": "final", "certeza": 80,
+     "si": {"ambiente": "interior", "luz": "luz_indirecta",
+            "nivel": "avanzado", "objetivo": "follaje"},
+     "entonces": ["calatea", "helecho", "areca"]},
+    {"id": "R16", "tipo": "final", "certeza": 85,
+     "si": {"ambiente": "interior", "luz": "luz_indirecta",
+            "restriccion": "ninguna", "objetivo": "flores"},
+     "entonces": ["cuna_moises", "anturio"]},
+    {"id": "R17", "tipo": "final", "certeza": 80,
+     "si": {"ambiente": "interior", "luz": "luz_indirecta",
+            "objetivo": "flores"},
+     "entonces": ["phalaenopsis", "bromelia"]},
+
+    # --- Reglas finales: exterior con sol -----------------------------------
+    {"id": "R18", "tipo": "final", "certeza": 90,
+     "si": {"ambiente": "exterior_sol", "clima": CALIDO_O_TEMPLADO,
+            "objetivo": "flores", "restriccion": "ninguna"},
+     "entonces": ["veranera", "mono_senora", "ave_paraiso"]},
+    {"id": "R19", "tipo": "final", "certeza": 85,
+     "si": {"ambiente": "exterior_sol", "clima": CALIDO_O_TEMPLADO,
+            "objetivo": "flores"},
+     "entonces": ["hibisco", "veranera", "mono_senora"]},
+    {"id": "R20", "tipo": "final", "certeza": 85,
+     "si": {"ambiente": "exterior_sol", "clima": CALIDO_O_TEMPLADO,
+            "objetivo": "follaje", "restriccion": "ninguna"},
+     "entonces": ["croton", "cana_india"]},
+    {"id": "R21", "tipo": "final", "certeza": 85,
+     "si": {"ambiente": "exterior_sol", "objetivo": "cerca_viva",
+            "clima": CALIDO_O_TEMPLADO, "restriccion": "ninguna"},
+     "entonces": ["itabo", "cana_india"]},
+    {"id": "R22", "tipo": "final", "certeza": 80,
+     "si": {"ambiente": "exterior_sol", "objetivo": "cerca_viva"},
+     "entonces": ["hibisco", "areca"]},
+    {"id": "R23", "tipo": "final", "certeza": 85,
+     "si": {"ambiente": "exterior_sol", "clima": "fresco",
+            "objetivo": "flores"},
+     "entonces": ["rosa"]},
+
+    # --- Reglas finales: exterior con sombra --------------------------------
+    {"id": "R24", "tipo": "final", "certeza": 85,
+     "si": {"ambiente": "exterior_sombra", "clima": "fresco",
+            "objetivo": "flores", "restriccion": "ninguna"},
+     "entonces": ["hortensia", "azalea", "begonia"]},
+    {"id": "R25", "tipo": "final", "certeza": 80,
+     "si": {"ambiente": "exterior_sombra", "clima": ["templado", "fresco"],
+            "objetivo": "flores"},
+     "entonces": ["chinas"]},
+    {"id": "R26", "tipo": "final", "certeza": 75,
+     "si": {"ambiente": "exterior_sombra", "clima": "calido",
+            "objetivo": "flores"},
+     "entonces": ["heliconia"]},
+    {"id": "R27", "tipo": "final", "certeza": 85,
+     "si": {"ambiente": "exterior_sombra", "objetivo": "follaje"},
+     "entonces": ["helecho", "calatea", "bromelia"]},
+    {"id": "R28", "tipo": "final", "certeza": 80,
+     "si": {"ambiente": "exterior_sombra", "objetivo": "follaje",
+            "clima": CALIDO_O_TEMPLADO, "restriccion": "ninguna"},
+     "entonces": ["mano_tigre", "anturio", "telefono"]},
+
+    # --- Reglas finales: bajo mantenimiento y especiales ---------------------
+    {"id": "R29", "tipo": "final", "certeza": 80,
+     "si": {"ambiente": "exterior_sol", "cuidado": "poco"},
+     "entonces": ["echeveria", "haworthia"]},
+    {"id": "R30", "tipo": "final", "certeza": 85,
+     "si": {"ambiente": "exterior_sol", "cuidado": "poco",
+            "restriccion": "ninguna"},
+     "entonces": ["sabila", "lengua_suegra"]},
+    {"id": "R31", "tipo": "final", "certeza": 75,
+     "si": {"ambiente": "exterior_sombra", "clima": "templado",
+            "objetivo": "flores", "nivel": "avanzado"},
+     "entonces": ["guaria_morada"]},
+]
+
+# Huecos conocidos: combinaciones donde el sistema, a propósito, NO recomienda
+# nada. No son reglas de recomendación; solo permiten dar una sugerencia más
+# precisa que el mensaje general. Se evalúan con el mismo comparador que las
+# reglas (también son datos).
+HUECOS_CONOCIDOS = [
+    {"id": "H1",
+     "si": {"ambiente": "interior", "luz": "poca_luz", "objetivo": "flores"},
+     "mensaje": "Con poca luz, las plantas de interior casi no florecen. "
+                "Pruebe con plantas de follaje o acerque la planta a una "
+                "ventana."},
+    {"id": "H2",
+     "si": {"ambiente": "interior", "objetivo": "cerca_viva"},
+     "mensaje": "Una cerca viva se siembra afuera: la combinación interior + "
+                "cerca viva es contradictoria. Elija jardín o balcón."},
+    {"id": "H3",
+     "si": {"ambiente": "interior", "luz": "pleno_sol"},
+     "mensaje": "El sol directo detrás de un vidrio suele quemar las plantas "
+                "de interior. Pruebe con un lugar de luz indirecta."},
+]
+
+
+# =============================================================================
+# 5. Motor de inferencia
+# =============================================================================
+
+class BaseConocimientoInvalida(Exception):
+    """Se lanza cuando la base de conocimiento tiene errores de escritura."""
+
+
+def valores_aceptados(esperado):
+    """Normaliza una condición: un valor único se convierte en lista de uno."""
+    return esperado if isinstance(esperado, list) else [esperado]
+
+
+def cumple_condiciones(condiciones, hechos):
+    """Indica si TODAS las condiciones se cumplen con los hechos conocidos.
+
+    Un hecho que todavía no se conoce no cumple la condición (se usa .get,
+    que devuelve None y None nunca está en la lista de valores aceptados).
+    """
+    return all(hechos.get(clave) in valores_aceptados(esperado)
+               for clave, esperado in condiciones.items())
+
+
+def encadenar(respuestas, reglas=None):
+    """Encadenamiento hacia adelante con las reglas intermedias.
+
+    Parte de las respuestas del usuario y aplica reglas intermedias una y
+    otra vez hasta llegar a un punto fijo: una vuelta completa sin hechos
+    nuevos. Cada regla se dispara como máximo una vez.
+
+    Devuelve una tupla (hechos, origen, disparadas):
+      hechos     -> respuestas + hechos derivados.
+      origen     -> {clave: id de la regla que lo dedujo} o "usuario".
+      disparadas -> reglas intermedias activadas, en orden de disparo.
+    """
+    if reglas is None:
+        reglas = REGLAS
+    hechos = dict(respuestas)
+    origen = {clave: "usuario" for clave in respuestas}
+    disparadas = []
+    ids_disparados = set()
+
+    hubo_cambios = True
+    while hubo_cambios:                       # se repite hasta el punto fijo
+        hubo_cambios = False
+        for regla in reglas:
+            if regla["tipo"] != "intermedia" or regla["id"] in ids_disparados:
+                continue                      # nunca se dispara dos veces
+            if not cumple_condiciones(regla["si"], hechos):
+                continue
+            clave, valor = regla["entonces"]
+            # Un hecho ya establecido no se sobrescribe: evita que dos reglas
+            # se contradigan en silencio.
+            if clave in hechos:
+                continue
+            hechos[clave] = valor
+            origen[clave] = regla["id"]
+            disparadas.append(regla)
+            ids_disparados.add(regla["id"])
+            hubo_cambios = True
+    return hechos, origen, disparadas
+
+
+def numero_de_regla(regla):
+    """Devuelve el número de una regla (R12 -> 12) para desempatar."""
+    return int(regla["id"][1:])
+
+
+def evaluar(hechos, reglas=None):
+    """Devuelve las reglas finales que se cumplen, de la más fuerte a la débil.
+
+    Orden: 1) mayor certeza; 2) más condiciones (una regla más específica
+    describe mejor el caso; una lista cuenta como una sola condición);
+    3) id menor.
+    """
+    if reglas is None:
+        reglas = REGLAS
+    activadas = [regla for regla in reglas
+                 if regla["tipo"] == "final"
+                 and cumple_condiciones(regla["si"], hechos)]
+    activadas.sort(key=lambda r: (-r["certeza"], -len(r["si"]),
+                                  numero_de_regla(r)))
+    return activadas
+
+
+def filtrar_por_seguridad(activadas, hechos):
+    """Filtro de seguridad, aplicado DESPUÉS de evaluar (defensa en profundidad).
+
+    Aunque las reglas ya consideran la restricción, este filtro revisa planta
+    por planta contra el catálogo, por si una regla quedó mal escrita:
+      - con restriccion = no_toxicas se eliminan las plantas "toxica" y las
+        "sin_registro" se conservan con un aviso amarillo;
+      - sin restricción, las tóxicas se conservan con un aviso rojo.
+    Si una conclusión queda sin plantas, se descarta.
+
+    Devuelve una lista de recomendaciones:
+      {"regla": regla, "plantas": [(id, aviso)], "excluidas": [ids]}
+    donde aviso es None, "toxica" o "sin_registro".
+    """
+    hay_restriccion = hechos.get("restriccion") == "no_toxicas"
+    recomendaciones = []
+    for regla in activadas:
+        plantas, excluidas = [], []
+        for id_planta in regla["entonces"]:
+            toxicidad = PLANTAS_POR_ID[id_planta]["toxicidad"]
+            if hay_restriccion and toxicidad == "toxica":
+                excluidas.append(id_planta)
+            elif hay_restriccion and toxicidad == "sin_registro":
+                plantas.append((id_planta, "sin_registro"))
+            elif not hay_restriccion and toxicidad == "toxica":
+                plantas.append((id_planta, "toxica"))
+            else:
+                plantas.append((id_planta, None))
+        if plantas:
+            recomendaciones.append({"regla": regla, "plantas": plantas,
+                                    "excluidas": excluidas})
+    return recomendaciones
+
+
+def buscar_hueco(hechos):
+    """Devuelve el hueco conocido que corresponde a los hechos, o None."""
+    for hueco in HUECOS_CONOCIDOS:
+        if cumple_condiciones(hueco["si"], hechos):
+            return hueco
+    return None
+
+
+def resolver_consulta(respuestas):
+    """Ejecuta el ciclo completo de inferencia para unas respuestas.
+
+    Encadena, evalúa, filtra y, si no queda ninguna recomendación, busca si
+    el caso es un hueco conocido. No imprime nada: la salida es un
+    diccionario que usan la interfaz, el historial y las pruebas.
+    """
+    hechos, origen, intermedias = encadenar(respuestas)
+    activadas = evaluar(hechos)
+    recomendaciones = filtrar_por_seguridad(activadas, hechos)
+    hueco = None if recomendaciones else buscar_hueco(hechos)
+    return {"respuestas": dict(respuestas), "hechos": hechos,
+            "origen": origen, "intermedias": intermedias,
+            "recomendaciones": recomendaciones, "hueco": hueco}
+
+
+def validar_base_conocimiento():
+    """Revisa la base de conocimiento al iniciar y falla ruidosamente.
+
+    Junta TODOS los errores encontrados y lanza BaseConocimientoInvalida con
+    la lista completa, para corregirlos de una sola vez. Revisa:
+      - ids duplicados (reglas, preguntas, plantas);
+      - claves o valores de condiciones que no existen en las preguntas ni
+        en los hechos derivados;
+      - conclusiones que referencian plantas fuera del catálogo;
+      - certezas fuera de 0–100;
+      - los mínimos del enunciado (reglas, preguntas y conclusiones).
+    """
+    errores = []
+
+    # Valores válidos de cada hecho: los de las preguntas + los derivados.
+    valores_validos = {}
+    for pregunta in PREGUNTAS:
+        if pregunta["clave"] in valores_validos:
+            errores.append(f"Pregunta duplicada: {pregunta['clave']}")
+        valores_validos[pregunta["clave"]] = {v for v, _ in
+                                              pregunta["opciones"]}
+        if len(pregunta["opciones"]) < 2:
+            errores.append(f"La pregunta {pregunta['clave']} tiene menos de "
+                           f"2 opciones")
+    for clave, valores in HECHOS_DERIVADOS.items():
+        if clave in valores_validos:
+            errores.append(f"El hecho derivado {clave} choca con una pregunta")
+        valores_validos[clave] = set(valores)
+
+    # Catálogo.
+    ids_plantas = [planta["id"] for planta in CATALOGO]
+    for id_planta in sorted({i for i in ids_plantas
+                             if ids_plantas.count(i) > 1}):
+        errores.append(f"Planta duplicada en el catálogo: {id_planta}")
+    for planta in CATALOGO:
+        if planta["toxicidad"] not in TOXICIDADES_VALIDAS:
+            errores.append(f"Toxicidad inválida en {planta['id']}: "
+                           f"{planta['toxicidad']}")
+        if not planta["id"].isascii():
+            errores.append(f"El id {planta['id']} no debe llevar tildes")
+
+    def revisar_condiciones(dueno, condiciones):
+        """Valida claves y valores de un bloque "si"."""
+        for clave, esperado in condiciones.items():
+            if clave not in valores_validos:
+                errores.append(f"{dueno}: la clave '{clave}' no existe")
+                continue
+            for valor in valores_aceptados(esperado):
+                if valor not in valores_validos[clave]:
+                    errores.append(f"{dueno}: el valor '{valor}' no es "
+                                   f"válido para '{clave}'")
+
+    # Reglas.
+    ids_reglas = [regla["id"] for regla in REGLAS]
+    for id_regla in sorted({i for i in ids_reglas
+                            if ids_reglas.count(i) > 1}):
+        errores.append(f"Id de regla duplicado: {id_regla}")
+    for regla in REGLAS:
+        revisar_condiciones(regla["id"], regla["si"])
+        if regla["tipo"] == "intermedia":
+            clave, valor = regla["entonces"]
+            if valor not in HECHOS_DERIVADOS.get(clave, {}):
+                errores.append(f"{regla['id']}: concluye un hecho no "
+                               f"declarado ({clave} = {valor})")
+        elif regla["tipo"] == "final":
+            if not regla["entonces"]:
+                errores.append(f"{regla['id']}: no recomienda ninguna planta")
+            for id_planta in regla["entonces"]:
+                if id_planta not in PLANTAS_POR_ID:
+                    errores.append(f"{regla['id']}: la planta '{id_planta}' "
+                                   f"no está en el catálogo")
+            if not 0 <= regla.get("certeza", -1) <= 100:
+                errores.append(f"{regla['id']}: certeza fuera de 0–100")
+        else:
+            errores.append(f"{regla['id']}: tipo desconocido {regla['tipo']}")
+
+    for hueco in HUECOS_CONOCIDOS:
+        revisar_condiciones(hueco["id"], hueco["si"])
+
+    # Mínimos del enunciado.
+    finales = [regla for regla in REGLAS if regla["tipo"] == "final"]
+    conclusiones = {tuple(regla["entonces"]) for regla in finales}
+    if len(REGLAS) < MINIMO_REGLAS:
+        errores.append(f"Hay {len(REGLAS)} reglas; el mínimo es "
+                       f"{MINIMO_REGLAS}")
+    if len(PREGUNTAS) < MINIMO_PREGUNTAS:
+        errores.append(f"Hay {len(PREGUNTAS)} preguntas; el mínimo es "
+                       f"{MINIMO_PREGUNTAS}")
+    if len(conclusiones) < MINIMO_CONCLUSIONES:
+        errores.append(f"Hay {len(conclusiones)} conclusiones distintas; el "
+                       f"mínimo es {MINIMO_CONCLUSIONES}")
+
+    if errores:
+        raise BaseConocimientoInvalida(
+            "La base de conocimiento tiene errores:\n  - "
+            + "\n  - ".join(errores))
+    return True
+
+
+# =============================================================================
+# 6. Explicación y salida
+# =============================================================================
+# (En construcción.)
+
+
+# =============================================================================
+# 7. Historial
+# =============================================================================
+# (En construcción.)
+
+
+# =============================================================================
+# 8. Programa principal
+# =============================================================================
+
+if __name__ == "__main__":
+    validar_base_conocimiento()
+    print("Base de conocimiento válida. Interfaz en construcción.")
