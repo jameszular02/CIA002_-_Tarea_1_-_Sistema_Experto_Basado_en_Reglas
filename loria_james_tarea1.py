@@ -1829,7 +1829,7 @@ button { font: inherit; color: inherit; }
 const PREGUNTAS = __PREGUNTAS__;
 const FRASES = __FRASES__;
 const MOVIMIENTO = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-const estado = { paso: 0, respuestas: {} };
+const estado = { paso: 0, respuestas: {}, enviando: false };
 const $ = (selector) => document.querySelector(selector);
 
 // Crea un elemento con textContent (nunca innerHTML con datos).
@@ -1965,6 +1965,9 @@ function irA(indice) {
 
 async function avanzar(evento) {
   evento.preventDefault();
+  // Un Enter de más mientras la consulta va en camino no debe repetirla
+  // (ni guardarla dos veces en el historial).
+  if (estado.enviando) return;
   const pregunta = PREGUNTAS[estado.paso];
   if (!respondida(pregunta.clave)) {
     mostrarError("Elija una opción para continuar.");
@@ -1983,6 +1986,7 @@ async function avanzar(evento) {
 
 async function consultar() {
   const boton = $("#siguiente");
+  estado.enviando = true;
   boton.disabled = true;
   boton.textContent = "Buscando su planta…";
   try {
@@ -2001,6 +2005,7 @@ async function consultar() {
     mostrarErrorServidor("No pude conectarme con el programa. Revise que " +
       "siga corriendo en la terminal y vuelva a intentar.");
   } finally {
+    estado.enviando = false;
     boton.disabled = false;
     boton.textContent = "Ver mi recomendación";
   }
