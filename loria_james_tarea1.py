@@ -1212,7 +1212,9 @@ def main(argumentos=None):
 # En GitHub Codespaces el puerto se reenvía solo y se abre en el navegador.
 
 PUERTO_WEB = 8000
-ANFITRION_WEB = "127.0.0.1"          # solo accesible desde esta máquina
+# Por defecto solo accesible desde esta máquina. En un servidor público
+# (Render) se define HOST=0.0.0.0 para aceptar conexiones de afuera.
+ANFITRION_WEB = os.environ.get("HOST", "127.0.0.1")
 TAMANO_MAXIMO_PETICION = 10_000      # bytes; una consulta real pesa ~200
 FILAS_HISTORIAL_WEB = 10
 
