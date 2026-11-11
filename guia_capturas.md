@@ -108,13 +108,15 @@ clear && python loria_james_tarea1.py --web
 
 1. Abra la página: aviso de abajo a la derecha → **Open in Browser**, o
    pestaña **PORTS** → puerto **8000** → ícono del globo 🌐.
-2. Responda el caso C (Bajura caliente · Jardín · Pleno sol · Medio · No ·
-   Flores · Principiante) y presione **Recomendar**.
-3. Capture la recomendación principal, las alternativas y la sección
-   «¿Por qué? Encadenamiento hacia adelante» con sus tres pasos.
-4. Presione **Recomendar** sin responder todo para capturar la validación
-   (las preguntas faltantes se marcan en rojo).
-5. Baje hasta «Historial de consultas» para capturar la tabla del CSV.
+2. Las preguntas salen una por pantalla. Responda el caso C con el mouse o
+   con el teclado, igual que en la terminal: `1` Enter, `3` Enter, `1` Enter,
+   `2` Enter, `n` Enter, `1` Enter, `1` Enter.
+3. Capture el resultado: la etiqueta con la recomendación principal (R18),
+   «También le pueden servir» y «¿Por qué esta recomendación?» con sus tres
+   tramos (sus respuestas, lo que dedujo y la regla que decidió).
+4. Validación: en la primera pregunta presione **Siguiente** sin elegir nada
+   y capture el mensaje «Elija una opción para continuar.».
+5. Baje hasta «Consultas anteriores» para capturar el historial del CSV.
 6. Vuelva a la terminal y presione `Ctrl+C` para detener el servidor.
 
 ## Si los colores se ven mal
