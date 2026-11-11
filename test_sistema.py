@@ -10,8 +10,12 @@ import csv
 import io
 import itertools
 import os
+import json
 import tempfile
+import threading
 import unittest
+import urllib.error
+import urllib.request
 from contextlib import redirect_stdout
 from unittest import mock
 
@@ -390,6 +394,124 @@ class TestModoPruebas(unittest.TestCase):
             with self.assertRaisesRegex(sistema.BaseConocimientoInvalida,
                                         "Caso A"):
                 sistema.validar_base_conocimiento()
+
+
+class TestInterfazWeb(unittest.TestCase):
+    """Modo --web: validación, conversión a JSON y servidor HTTP real."""
+
+    RESPUESTAS_C = {"zona": "bajura_caliente", "ubicacion": "jardin",
+                    "luz": "pleno_sol", "cuidado": "medio", "mascotas": "n",
+                    "objetivo": "flores", "experiencia": "principiante"}
+
+    @classmethod
+    def setUpClass(cls):
+        # Servidor real en un puerto libre (0) y un historial temporal.
+        cls.carpeta = tempfile.TemporaryDirectory()
+        cls.ruta_csv = os.path.join(cls.carpeta.name, "h.csv")
+        cls.parche = mock.patch.object(sistema, "ARCHIVO_HISTORIAL",
+                                       cls.ruta_csv)
+        cls.parche.start()
+        # Silencia el registro de peticiones mientras corren las pruebas.
+        cls.silencio = mock.patch.object(sistema.ManejadorWeb, "log_message",
+                                         lambda *args: None)
+        cls.silencio.start()
+        cls.servidor = sistema.crear_servidor(0)
+        cls.hilo = threading.Thread(target=cls.servidor.serve_forever,
+                                    daemon=True)
+        cls.hilo.start()
+        cls.base = f"http://127.0.0.1:{cls.servidor.server_address[1]}"
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.servidor.shutdown()
+        cls.servidor.server_close()
+        cls.silencio.stop()
+        cls.parche.stop()
+        cls.carpeta.cleanup()
+
+    def pedir(self, ruta, datos=None, crudo=None):
+        """Hace una petición y devuelve (código, cuerpo como texto)."""
+        cuerpo = crudo if crudo is not None else (
+            json.dumps(datos).encode("utf-8") if datos is not None else None)
+        peticion = urllib.request.Request(
+            self.base + ruta, data=cuerpo,
+            headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(peticion, timeout=5) as respuesta:
+                return respuesta.status, respuesta.read().decode("utf-8")
+        except urllib.error.HTTPError as error:
+            return error.code, error.read().decode("utf-8")
+
+    def test_validar_respuestas_web(self):
+        respuestas, errores = sistema.validar_respuestas_web(self.RESPUESTAS_C)
+        self.assertEqual((respuestas, errores), (self.RESPUESTAS_C, []))
+        malas = dict(self.RESPUESTAS_C, zona="marte")
+        del malas["luz"]
+        respuestas, errores = sistema.validar_respuestas_web(malas)
+        self.assertIsNone(respuestas)
+        self.assertEqual(len(errores), 2)
+        self.assertIn("marte", errores[0])
+        self.assertIn("Falta responder: ¿Cuánta luz", errores[1])
+        self.assertEqual(sistema.validar_respuestas_web([1, 2])[1],
+                         ["La consulta debe ser un objeto JSON."])
+
+    def test_resultado_a_dict_muestra_el_encadenamiento(self):
+        datos = sistema.resultado_a_dict(resultado_de("C"), True)
+        self.assertEqual(datos["principal"]["id"], "R18")
+        self.assertEqual([a["id"] for a in datos["alternativas"]], ["R19"])
+        self.assertEqual([i["id"] for i in datos["intermedias"]],
+                         ["R1", "R5", "R8", "R10"])
+        self.assertIn("clima = calido [de R1]",
+                      datos["finales"][0]["condiciones"])
+        self.assertEqual(datos["principal"]["plantas"][2]["aviso_texto"],
+                         sistema.AVISO_TOXICA)
+        json.dumps(datos)                    # debe poder enviarse como JSON
+
+    def test_pagina_principal(self):
+        codigo, cuerpo = self.pedir("/")
+        self.assertEqual(codigo, 200)
+        self.assertIn("<!doctype html>", cuerpo)
+        self.assertIn("¿Cuánta luz recibe ese lugar?", cuerpo)
+        self.assertNotIn("__PREGUNTAS__", cuerpo)
+
+    def test_consulta_valida_responde_y_guarda_historial(self):
+        codigo, cuerpo = self.pedir("/api/consultar", self.RESPUESTAS_C)
+        self.assertEqual(codigo, 200)
+        datos = json.loads(cuerpo)
+        self.assertEqual(datos["principal"]["id"], "R18")
+        self.assertTrue(datos["guardado"])
+        codigo, cuerpo = self.pedir("/api/historial")
+        filas = json.loads(cuerpo)
+        self.assertEqual(codigo, 200)
+        self.assertTrue(filas[0]["recomendacion_principal"].startswith("R18"))
+        with open(self.ruta_csv, newline="", encoding="utf-8") as archivo:
+            self.assertEqual(next(csv.reader(archivo)),
+                             sistema.ENCABEZADO_HISTORIAL)
+
+    def test_consulta_sin_conclusion(self):
+        respuestas = dict(self.RESPUESTAS_C, zona="valle_central",
+                          ubicacion="interior", luz="poca_luz")
+        codigo, cuerpo = self.pedir("/api/consultar", respuestas)
+        datos = json.loads(cuerpo)
+        self.assertEqual(codigo, 200)
+        self.assertIsNone(datos["principal"])
+        self.assertEqual(datos["hueco"], {"id": "H1"})
+
+    def test_consultas_invalidas_dan_400(self):
+        codigo, cuerpo = self.pedir("/api/consultar", {"zona": "marte"})
+        self.assertEqual(codigo, 400)
+        self.assertIn("errores", json.loads(cuerpo))
+        codigo, _ = self.pedir("/api/consultar", crudo=b"no es json")
+        self.assertEqual(codigo, 400)
+        codigo, _ = self.pedir("/no-existe")
+        self.assertEqual(codigo, 404)
+
+    def test_puerto_invalido_muestra_uso(self):
+        salida = io.StringIO()
+        with redirect_stdout(salida):
+            codigo = sistema.main(["--web", "abc"])
+        self.assertEqual(codigo, 2)
+        self.assertIn("--web", salida.getvalue())
 
 
 class TestEntradas(unittest.TestCase):

@@ -12,14 +12,21 @@
 # inferencia es un conjunto de funciones que recorren esos datos. No hay un
 # "if" por regla: agregar una regla nueva es agregar un diccionario.
 #
-# Uso:  python loria_james_tarea1.py
+# Uso:  python loria_james_tarea1.py            consulta en la terminal
+#       python loria_james_tarea1.py --web      interfaz web en el navegador
+#       python loria_james_tarea1.py --pruebas  casos de prueba integrados
 # Solo usa la biblioteca estándar de Python (3.10 o superior).
 # =============================================================================
 
 import csv
+import html
+import json
 import os
 import sys
+import threading
 from datetime import datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlparse
 
 
 # =============================================================================
@@ -1143,8 +1150,10 @@ def ejecutar_casos_prueba():
 
 
 USO = ("Uso:\n"
-       "  python loria_james_tarea1.py            consulta interactiva\n"
-       "  python loria_james_tarea1.py --pruebas  corre los casos de prueba")
+       "  python loria_james_tarea1.py              consulta en la terminal\n"
+       "  python loria_james_tarea1.py --web [puerto]  interfaz web "
+       "(por defecto, puerto 8000)\n"
+       "  python loria_james_tarea1.py --pruebas    corre los casos de prueba")
 
 
 def main(argumentos=None):
@@ -1152,12 +1161,18 @@ def main(argumentos=None):
 
     Sin argumentos: ciclo interactivo (validar, preguntar, inferir,
     explicar y repetir). Con --pruebas: corre los casos integrados.
+    Con --web [puerto]: abre la interfaz web (sección 9).
     Devuelve el código de salida del programa (0 si todo salió bien).
     """
     if argumentos is None:
         argumentos = sys.argv[1:]
     if argumentos == ["--pruebas"]:
         return ejecutar_casos_prueba()
+    if argumentos[:1] == ["--web"] and len(argumentos) <= 2:
+        if len(argumentos) == 1:
+            return iniciar_interfaz_web(PUERTO_WEB)
+        if argumentos[1].isdecimal() and 1 <= int(argumentos[1]) <= 65535:
+            return iniciar_interfaz_web(int(argumentos[1]))
     if argumentos:
         print(USO)
         return 2
@@ -1186,6 +1201,609 @@ def main(argumentos=None):
 
     print(color("Gracias por usar el recomendador. ¡Pura vida!", VERDE))
     return 0
+
+
+# =============================================================================
+# 9. Interfaz web (extra: una interfaz más cuidada)
+# =============================================================================
+# Una página web servida con http.server (biblioteca estándar). Usa el mismo
+# motor, la misma explicación y el mismo historial CSV que la terminal: la
+# interfaz solo cambia cómo se pregunta y cómo se muestra el resultado.
+# En GitHub Codespaces el puerto se reenvía solo y se abre en el navegador.
+
+PUERTO_WEB = 8000
+ANFITRION_WEB = "127.0.0.1"          # solo accesible desde esta máquina
+TAMANO_MAXIMO_PETICION = 10_000      # bytes; una consulta real pesa ~200
+FILAS_HISTORIAL_WEB = 10
+
+# Varias peticiones pueden llegar a la vez: el candado evita que dos hilos
+# escriban el CSV al mismo tiempo y mezclen las filas.
+CANDADO_HISTORIAL = threading.Lock()
+
+
+def validar_respuestas_web(datos):
+    """Valida las respuestas que llegan del navegador.
+
+    Es la misma idea que preguntar() en la terminal: no se confía en la
+    entrada. Devuelve (respuestas, errores); si hay errores, respuestas
+    es None y no se ejecuta la consulta.
+    """
+    if not isinstance(datos, dict):
+        return None, ["La consulta debe ser un objeto JSON."]
+    respuestas, errores = {}, []
+    for pregunta in PREGUNTAS:
+        valor = datos.get(pregunta["clave"])
+        validos = [v for v, _ in pregunta["opciones"]]
+        if valor in (None, ""):
+            errores.append(f"Falta responder: {pregunta['texto']}")
+        elif valor not in validos:
+            errores.append(f"Opción inválida en «{pregunta['texto']}»: "
+                           f"{valor}")
+        else:
+            respuestas[pregunta["clave"]] = valor
+    return (None, errores) if errores else (respuestas, [])
+
+
+def planta_a_dict(id_planta, aviso):
+    """Datos de una planta listos para enviar al navegador."""
+    planta = PLANTAS_POR_ID[id_planta]
+    textos = {"toxica": AVISO_TOXICA, "sin_registro": AVISO_SIN_REGISTRO}
+    return {"nombre": planta["nombre"], "cientifico": planta["cientifico"],
+            "tip": planta["tip"], "aviso": aviso,
+            "aviso_texto": textos.get(aviso)}
+
+
+def resultado_a_dict(resultado, guardado):
+    """Convierte el resultado del motor en un diccionario para JSON.
+
+    Separa la cadena de inferencia en sus tres niveles (respuestas, reglas
+    intermedias y reglas finales) para que la página pueda dibujar el
+    encadenamiento hacia adelante paso a paso.
+    """
+    hechos, origen = resultado["hechos"], resultado["origen"]
+    textos_opcion = {(p["clave"], v): t for p in PREGUNTAS
+                     for v, t in p["opciones"]}
+    visibles = resultado["visibles"]
+    ids_visibles = {rec["regla"]["id"] for rec in visibles}
+    recomendaciones = [
+        {"id": rec["regla"]["id"], "certeza": rec["regla"]["certeza"],
+         "plantas": [planta_a_dict(p, aviso) for p, aviso in rec["plantas"]]}
+        for rec in visibles]
+    return {
+        "respuestas": [
+            {"clave": clave, "valor": valor,
+             "texto": textos_opcion[(clave, valor)]}
+            for clave, valor in resultado["respuestas"].items()],
+        "intermedias": [
+            {"id": regla["id"],
+             "condiciones": [describir_hecho(c, hechos, origen)
+                             for c in regla["si"]],
+             "conclusion": "{} = {}".format(*regla["entonces"])}
+            for regla in resultado["intermedias"]],
+        "finales": [
+            {"id": rec["regla"]["id"], "certeza": rec["regla"]["certeza"],
+             "condiciones": [describir_hecho(c, hechos, origen)
+                             for c in rec["regla"]["si"]],
+             "mostrada": rec["regla"]["id"] in ids_visibles}
+            for rec in resultado["recomendaciones"]],
+        "notas": [linea for linea in explicar(resultado)
+                  if not linea.startswith("Se activó")],
+        "principal": recomendaciones[0] if recomendaciones else None,
+        "alternativas": recomendaciones[1:],
+        "hueco": ({"id": resultado["hueco"]["id"]}
+                  if resultado["hueco"] else None),
+        "sugerencia": (resultado["hueco"]["mensaje"] if resultado["hueco"]
+                       else SUGERENCIA_GENERAL),
+        "guardado": guardado,
+    }
+
+
+def leer_historial(archivo=None, limite=FILAS_HISTORIAL_WEB):
+    """Devuelve las últimas consultas del CSV, de la más reciente a la vieja."""
+    if archivo is None:
+        archivo = ARCHIVO_HISTORIAL
+    try:
+        with open(archivo, newline="", encoding="utf-8") as entrada:
+            filas = list(csv.DictReader(entrada))
+    except OSError:
+        return []                    # todavía no hay historial
+    return filas[::-1][:limite]
+
+
+def pagina_html():
+    """Arma la página: las preguntas salen de PREGUNTAS (datos), no de HTML."""
+    preguntas = [{"clave": p["clave"], "texto": p["texto"],
+                  "opciones": p["opciones"]} for p in PREGUNTAS]
+    # "</" se escapa para que un texto nunca pueda cerrar la etiqueta <script>.
+    datos = json.dumps(preguntas, ensure_ascii=False).replace("</", "<\\/")
+    return (PLANTILLA_HTML
+            .replace("__AVISO__", html.escape(AVISO_INICIAL))
+            .replace("__PREGUNTAS__", datos))
+
+
+class ManejadorWeb(BaseHTTPRequestHandler):
+    """Atiende las peticiones del navegador.
+
+    GET  /               -> la página
+    GET  /api/historial  -> últimas consultas guardadas en el CSV
+    POST /api/consultar  -> valida, infiere, guarda en el historial y
+                            devuelve el resultado con su explicación
+    """
+
+    def enviar(self, codigo, cuerpo, tipo):
+        """Envía una respuesta HTTP con su tipo de contenido."""
+        datos = cuerpo.encode("utf-8")
+        self.send_response(codigo)
+        self.send_header("Content-Type", tipo)
+        self.send_header("Content-Length", str(len(datos)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(datos)
+
+    def enviar_json(self, codigo, objeto):
+        """Envía un objeto como JSON en UTF-8."""
+        self.enviar(codigo, json.dumps(objeto, ensure_ascii=False),
+                    "application/json; charset=utf-8")
+
+    def do_GET(self):
+        ruta = urlparse(self.path).path
+        if ruta == "/":
+            self.enviar(200, pagina_html(), "text/html; charset=utf-8")
+        elif ruta == "/api/historial":
+            self.enviar_json(200, leer_historial())
+        else:
+            self.enviar_json(404, {"errores": ["Página no encontrada."]})
+
+    def do_POST(self):
+        if urlparse(self.path).path != "/api/consultar":
+            self.enviar_json(404, {"errores": ["Página no encontrada."]})
+            return
+        try:
+            largo = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            largo = -1
+        if not 0 < largo <= TAMANO_MAXIMO_PETICION:
+            self.enviar_json(400, {"errores": ["Consulta vacía o demasiado "
+                                               "grande."]})
+            return
+        try:
+            datos = json.loads(self.rfile.read(largo).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            self.enviar_json(400, {"errores": ["La consulta no es JSON "
+                                               "válido."]})
+            return
+        respuestas, errores = validar_respuestas_web(datos)
+        if errores:
+            self.enviar_json(400, {"errores": errores})
+            return
+        resultado = resolver_consulta(respuestas)
+        with CANDADO_HISTORIAL:
+            guardado = guardar_historial(resultado)
+        self.enviar_json(200, resultado_a_dict(resultado, guardado))
+
+    def log_message(self, formato, *argumentos):
+        """Registro breve en la terminal: método, ruta y código."""
+        print(f"  [web] {self.command} {urlparse(self.path).path} -> "
+              f"{argumentos[1] if len(argumentos) > 1 else ''}")
+
+
+def crear_servidor(puerto=PUERTO_WEB, anfitrion=ANFITRION_WEB):
+    """Crea el servidor web (puerto 0 = cualquiera libre, útil en pruebas)."""
+    return ThreadingHTTPServer((anfitrion, puerto), ManejadorWeb)
+
+
+def iniciar_interfaz_web(puerto=PUERTO_WEB):
+    """Modo --web: valida la base, levanta el servidor y espera Ctrl+C."""
+    try:
+        validar_base_conocimiento()
+    except BaseConocimientoInvalida as error:
+        print(color(str(error), ROJO))
+        return 1
+    try:
+        servidor = crear_servidor(puerto)
+    except OSError as error:
+        print(color(f"No se pudo usar el puerto {puerto}: {error}", ROJO))
+        print(f"Pruebe con otro: python loria_james_tarea1.py --web "
+              f"{puerto + 1}")
+        return 1
+    mostrar_bienvenida()
+    print(color(f"Interfaz web lista en http://localhost:{puerto}",
+                VERDE, NEGRITA))
+    print("En Codespaces: pestaña PORTS (o el aviso que aparece abajo a la "
+          "derecha) → «Open in Browser».")
+    print(f"El historial se guarda en {ARCHIVO_HISTORIAL}. "
+          f"Presione Ctrl+C para detener el servidor.")
+    try:
+        servidor.serve_forever()
+    except KeyboardInterrupt:
+        print("\n" + color("Servidor detenido. ¡Hasta pronto!", AMARILLO))
+    finally:
+        servidor.server_close()
+    return 0
+
+
+PLANTILLA_HTML = """<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recomendador de plantas</title>
+<style>
+:root {
+  --fondo: #f4f6f1; --superficie: #ffffff; --texto: #1c2a21;
+  --suave: #5a6b5f; --borde: #d6ded6; --acento: #2e7a4c;
+  --acento-suave: #e3f1e8; --rojo: #b42318; --rojo-suave: #fdecea;
+  --amarillo: #8a5800; --amarillo-suave: #fff3d1; --cian: #0b6b82;
+  --cian-suave: #e2f3f7; --sombra: 0 1px 3px rgba(20, 40, 25, .08);
+  --sobre-acento: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fondo: #101612; --superficie: #18211b; --texto: #e6eee8;
+    --suave: #9caea1; --borde: #2b3a30; --acento: #5cc58a;
+    --acento-suave: #1b3324; --rojo: #ff8a80; --rojo-suave: #3a1916;
+    --amarillo: #ffd27a; --amarillo-suave: #392d11; --cian: #6fcfe5;
+    --cian-suave: #133039; --sombra: none; --sobre-acento: #0d1a12;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--fondo); color: var(--texto);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+.contenedor { max-width: 1160px; margin: 0 auto; padding: 0 16px; }
+header { background: var(--acento); color: var(--sobre-acento);
+  padding: 20px 0; }
+header h1 { margin: 0; font-size: 1.5rem; }
+header .subtitulo { margin: 2px 0 0; opacity: .9; }
+.aviso { white-space: pre-line; background: var(--amarillo-suave);
+  color: var(--amarillo); border-radius: 8px; padding: 10px 14px;
+  margin: 16px 0 0; font-size: .92rem; }
+.rejilla { display: grid; gap: 16px; margin-top: 16px; }
+@media (min-width: 920px) { .rejilla { grid-template-columns: 5fr 6fr;
+  align-items: start; } }
+.tarjeta { background: var(--superficie); border: 1px solid var(--borde);
+  border-radius: 12px; padding: 16px 18px; box-shadow: var(--sombra); }
+h2 { margin: 0 0 12px; font-size: 1.2rem; }
+h3 { margin: 18px 0 8px; font-size: 1.05rem; }
+h4 { margin: 0 0 6px; font-size: 1rem; }
+fieldset { border: 1px solid var(--borde); border-radius: 10px;
+  margin: 0 0 10px; padding: 8px 12px 12px; }
+fieldset.falta { border-color: var(--rojo); background: var(--rojo-suave); }
+legend { font-weight: 600; padding: 0 4px; }
+.opciones { display: flex; flex-wrap: wrap; gap: 8px; }
+.opcion { display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--borde); border-radius: 999px; padding: 6px 12px;
+  cursor: pointer; background: var(--superficie); }
+.opcion:hover { border-color: var(--acento); }
+.opcion:has(input:checked) { border-color: var(--acento);
+  background: var(--acento-suave); font-weight: 600; }
+.opcion input { accent-color: var(--acento); margin: 0; }
+.acciones { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+.boton { font: inherit; font-weight: 600; border: 0; border-radius: 8px;
+  padding: 10px 18px; cursor: pointer; background: var(--acento);
+  color: var(--sobre-acento); }
+.boton.secundario { background: transparent; color: var(--acento);
+  border: 1px solid var(--acento); }
+.boton:focus-visible, .opcion:focus-within { outline: 3px solid var(--cian);
+  outline-offset: 2px; }
+.errores { background: var(--rojo-suave); color: var(--rojo);
+  border-radius: 8px; padding: 8px 14px; margin-top: 12px; }
+.errores ul { margin: 0; padding-left: 18px; }
+.vacio, .suave { color: var(--suave); }
+.recomendacion { border: 1px solid var(--borde); border-radius: 10px;
+  padding: 12px 14px; margin-bottom: 10px; }
+.recomendacion.principal { border: 2px solid var(--acento);
+  background: var(--acento-suave); }
+.barra { height: 6px; background: var(--borde); border-radius: 3px;
+  overflow: hidden; margin: 4px 0 10px; }
+.barra span { display: block; height: 100%; background: var(--acento); }
+.plantas { list-style: none; margin: 0; padding: 0; display: grid;
+  gap: 8px; }
+.plantas li { background: var(--superficie); border: 1px solid var(--borde);
+  border-radius: 8px; padding: 8px 10px; }
+.plantas em { color: var(--suave); }
+.tip { font-size: .92rem; margin-top: 2px; }
+.aviso-planta { display: inline-block; margin-top: 6px; font-size: .85rem;
+  font-weight: 600; border-radius: 6px; padding: 2px 8px; }
+.aviso-planta.toxica { background: var(--rojo-suave); color: var(--rojo); }
+.aviso-planta.sin_registro { background: var(--amarillo-suave);
+  color: var(--amarillo); }
+.sin-conclusion { border: 2px solid var(--amarillo);
+  background: var(--amarillo-suave); border-radius: 10px; padding: 12px 14px; }
+.sin-conclusion p { margin: 6px 0 0; }
+.paso { border-left: 3px solid var(--cian); padding: 2px 0 2px 12px;
+  margin: 10px 0; }
+.paso > strong { display: block; margin-bottom: 6px; color: var(--cian); }
+.fila { display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  margin: 4px 0; }
+.paso .fila + .fila { border-top: 1px dashed var(--borde); padding-top: 6px; }
+.chip { border-radius: 6px; padding: 1px 8px; font-size: .85rem;
+  background: var(--fondo); border: 1px solid var(--borde);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  overflow-wrap: anywhere; }
+.chip.derivado { background: var(--cian-suave); border-color: var(--cian); }
+.regla { border-radius: 6px; padding: 1px 8px; font-size: .85rem;
+  font-weight: 700; background: var(--acento); color: var(--sobre-acento); }
+.regla.oculta { background: var(--suave); color: var(--superficie); }
+.flecha { color: var(--suave); }
+.notas { margin: 6px 0 0; padding-left: 18px; font-size: .92rem; }
+.tabla-envoltura { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+th, td { text-align: left; border-bottom: 1px solid var(--borde);
+  padding: 6px 8px; vertical-align: top; }
+th { color: var(--suave); font-weight: 600; }
+td.pequeno { font-size: .8rem; color: var(--suave); min-width: 260px; }
+footer { color: var(--suave); font-size: .85rem; padding: 20px 0 28px; }
+code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+</style>
+</head>
+<body>
+<header>
+  <div class="contenedor">
+    <h1>🌿 Recomendador de plantas ornamentales</h1>
+    <p class="subtitulo">Sistema experto basado en reglas para hogares
+      costarricenses</p>
+    <p class="aviso">__AVISO__</p>
+  </div>
+</header>
+
+<main class="contenedor rejilla">
+  <section class="tarjeta" aria-labelledby="titulo-consulta">
+    <h2 id="titulo-consulta">Consulta</h2>
+    <form id="formulario" novalidate></form>
+    <div id="errores" class="errores" role="alert" hidden></div>
+    <div class="acciones">
+      <button type="submit" form="formulario" class="boton">Recomendar</button>
+      <button type="button" id="nueva" class="boton secundario">Nueva
+        consulta</button>
+    </div>
+  </section>
+  <section id="resultado" class="tarjeta resultado" aria-live="polite"></section>
+</main>
+
+<section class="contenedor" style="margin-top:16px">
+  <div class="tarjeta">
+    <h2>Historial de consultas</h2>
+    <p class="suave">Últimas consultas guardadas en
+      <code>historial_consultas.csv</code>.</p>
+    <div class="tabla-envoltura">
+      <table>
+        <thead><tr><th>Fecha y hora</th><th>Recomendación principal</th>
+          <th>Reglas activadas</th><th>Respuestas</th></tr></thead>
+        <tbody id="historial"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<footer class="contenedor">James Loria · CIA02 – Introducción a la IA,
+  UCreativa · Toxicidad: ASPCA (consulta 9 nov 2026)</footer>
+
+<script>
+const PREGUNTAS = __PREGUNTAS__;
+const $ = (selector) => document.querySelector(selector);
+
+// Crea un elemento con textContent (nunca innerHTML con datos).
+function el(etiqueta, clase, texto) {
+  const nodo = document.createElement(etiqueta);
+  if (clase) nodo.className = clase;
+  if (texto !== undefined) nodo.textContent = texto;
+  return nodo;
+}
+
+function construirFormulario() {
+  const formulario = $("#formulario");
+  PREGUNTAS.forEach((pregunta, i) => {
+    const grupo = el("fieldset", "pregunta");
+    grupo.dataset.clave = pregunta.clave;
+    grupo.append(el("legend", null, `${i + 1}. ${pregunta.texto}`));
+    const opciones = el("div", "opciones");
+    pregunta.opciones.forEach(([valor, texto]) => {
+      const etiqueta = el("label", "opcion");
+      const radio = el("input");
+      radio.type = "radio"; radio.name = pregunta.clave; radio.value = valor;
+      radio.addEventListener("change", () => grupo.classList.remove("falta"));
+      etiqueta.append(radio, el("span", null, texto));
+      opciones.append(etiqueta);
+    });
+    grupo.append(opciones);
+    formulario.append(grupo);
+  });
+}
+
+function mostrarErrores(lista) {
+  const caja = $("#errores");
+  caja.replaceChildren();
+  caja.hidden = lista.length === 0;
+  if (!lista.length) return;
+  const ul = el("ul");
+  lista.forEach((texto) => ul.append(el("li", null, texto)));
+  caja.append(ul);
+}
+
+function resultadoVacio() {
+  $("#resultado").replaceChildren(el("h2", null, "Resultado"),
+    el("p", "vacio",
+       `Responda las ${PREGUNTAS.length} preguntas y presione «Recomendar».`));
+}
+
+function tarjetaRecomendacion(rec, esPrincipal, numero) {
+  const caja = el("article", esPrincipal ? "recomendacion principal"
+                                         : "recomendacion");
+  caja.append(el(esPrincipal ? "h3" : "h4", null, esPrincipal
+    ? `Recomendación principal (${rec.id}, certeza ${rec.certeza}%)`
+    : `${numero}. ${rec.id} (certeza ${rec.certeza}%)`));
+  const barra = el("div", "barra");
+  barra.setAttribute("aria-hidden", "true");
+  const relleno = el("span");
+  relleno.style.width = `${rec.certeza}%`;
+  barra.append(relleno);
+  caja.append(barra);
+  const lista = el("ul", "plantas");
+  rec.plantas.forEach((planta) => {
+    const li = el("li");
+    li.append(el("strong", null, planta.nombre), " ",
+              el("em", null, `(${planta.cientifico})`),
+              el("div", "tip", planta.tip));
+    if (planta.aviso) {
+      li.append(el("span", `aviso-planta ${planta.aviso}`,
+                   planta.aviso_texto));
+    }
+    lista.append(li);
+  });
+  caja.append(lista);
+  return caja;
+}
+
+function chips(fila, textos, clase) {
+  textos.forEach((texto) => {
+    fila.append(el("span", texto.includes("[de ") ? `chip derivado ${clase}`
+                                                  : `chip ${clase}`, texto));
+  });
+}
+
+function cadenaDeInferencia(r) {
+  const seccion = el("section");
+  seccion.append(el("h3", null, "¿Por qué? Encadenamiento hacia adelante"));
+
+  const paso1 = el("div", "paso");
+  paso1.append(el("strong", null, "1. Respuestas del usuario"));
+  const fila1 = el("div", "fila");
+  chips(fila1, r.respuestas.map((x) => `${x.clave} = ${x.valor}`), "");
+  paso1.append(fila1);
+
+  const paso2 = el("div", "paso");
+  paso2.append(el("strong", null,
+                  "2. Reglas intermedias: deducen hechos nuevos"));
+  r.intermedias.forEach((regla) => {
+    const fila = el("div", "fila");
+    chips(fila, regla.condiciones, "");
+    fila.append(el("span", "flecha", "→"), el("span", "regla", regla.id),
+                el("span", "flecha", "→"),
+                el("span", "chip derivado", regla.conclusion));
+    paso2.append(fila);
+  });
+
+  const paso3 = el("div", "paso");
+  paso3.append(el("strong", null,
+                  "3. Reglas finales: usan los hechos derivados [de Rn]"));
+  if (!r.finales.length) {
+    paso3.append(el("p", "suave", "Ninguna regla final se cumplió."));
+  }
+  r.finales.forEach((regla) => {
+    const fila = el("div", "fila");
+    fila.append(el("span", regla.mostrada ? "regla" : "regla oculta",
+                   `${regla.id} · ${regla.certeza}%`),
+                el("span", "flecha", "porque"));
+    chips(fila, regla.condiciones, "");
+    paso3.append(fila);
+  });
+
+  seccion.append(paso1, paso2, paso3);
+  if (r.notas.length) {
+    const ul = el("ul", "notas");
+    r.notas.forEach((nota) => ul.append(el("li", null, nota)));
+    seccion.append(el("strong", null, "Notas"), ul);
+  }
+  return seccion;
+}
+
+function mostrarResultado(r) {
+  const contenedor = $("#resultado");
+  contenedor.replaceChildren(el("h2", null, "Resultado"));
+  if (r.principal) {
+    contenedor.append(tarjetaRecomendacion(r.principal, true));
+    if (r.alternativas.length) {
+      contenedor.append(el("h3", null, "Alternativas"));
+      r.alternativas.forEach((alt, i) =>
+        contenedor.append(tarjetaRecomendacion(alt, false, i + 2)));
+    }
+  } else {
+    const caja = el("div", "sin-conclusion");
+    caja.append(el("strong", null, "Sin conclusión"),
+      el("p", null, "Ninguna regla de la base de conocimiento cubre esta " +
+         "combinación de respuestas. El sistema prefiere decirlo antes " +
+         "que inventar una recomendación."),
+      el("p", null, (r.hueco ? `Sugerencia (hueco conocido ${r.hueco.id}): `
+                             : "Sugerencia: ") + r.sugerencia));
+    contenedor.append(caja);
+  }
+  contenedor.append(cadenaDeInferencia(r));
+  contenedor.append(el("p", "suave", r.guardado
+    ? "✓ Consulta guardada en historial_consultas.csv"
+    : "No se pudo guardar el historial (vea la terminal)."));
+  if (window.innerWidth < 920) contenedor.scrollIntoView({behavior: "smooth"});
+}
+
+async function cargarHistorial() {
+  const cuerpo = $("#historial");
+  try {
+    const filas = await (await fetch("api/historial")).json();
+    cuerpo.replaceChildren();
+    if (!filas.length) {
+      const tr = el("tr"), td = el("td", "suave",
+        "Todavía no hay consultas guardadas.");
+      td.colSpan = 4; tr.append(td); cuerpo.append(tr);
+      return;
+    }
+    filas.forEach((fila) => {
+      const tr = el("tr");
+      tr.append(el("td", null, fila.fecha_hora),
+                el("td", null, fila.recomendacion_principal),
+                el("td", null, fila.reglas_activadas),
+                el("td", "pequeno", fila.respuestas));
+      cuerpo.append(tr);
+    });
+  } catch (error) {
+    cuerpo.replaceChildren();
+  }
+}
+
+async function consultar(evento) {
+  evento.preventDefault();
+  const datos = Object.fromEntries(new FormData($("#formulario")));
+  document.querySelectorAll(".pregunta").forEach((grupo) =>
+    grupo.classList.toggle("falta", !datos[grupo.dataset.clave]));
+  const faltan = PREGUNTAS.filter((p) => !datos[p.clave]);
+  if (faltan.length) {
+    mostrarErrores(faltan.map((p) => `Falta responder: ${p.texto}`));
+    return;
+  }
+  mostrarErrores([]);
+  try {
+    const respuesta = await fetch("api/consultar", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(datos)});
+    const json = await respuesta.json();
+    if (!respuesta.ok) {
+      mostrarErrores(json.errores || ["Error del servidor."]);
+      return;
+    }
+    mostrarResultado(json);
+    cargarHistorial();
+  } catch (error) {
+    mostrarErrores(["No se pudo conectar con el servidor. ¿Sigue " +
+                    "corriendo el programa en la terminal?"]);
+  }
+}
+
+function nuevaConsulta() {
+  $("#formulario").reset();
+  document.querySelectorAll(".pregunta").forEach((grupo) =>
+    grupo.classList.remove("falta"));
+  mostrarErrores([]);
+  resultadoVacio();
+  window.scrollTo({top: 0, behavior: "smooth"});
+}
+
+construirFormulario();
+resultadoVacio();
+cargarHistorial();
+$("#formulario").addEventListener("submit", consultar);
+$("#nueva").addEventListener("click", nuevaConsulta);
+</script>
+</body>
+</html>
+"""
 
 
 if __name__ == "__main__":
