@@ -79,7 +79,7 @@ cat historial_consultas.csv
 clear && python -m unittest -v
 ```
 
-Capture el final: `Ran 39 tests … OK`.
+Capture el final: `Ran 46 tests … OK`.
 
 **15. Casos de prueba integrados en el programa:**
 
@@ -97,6 +97,25 @@ clear && python cobertura.py
 ```
 
 Capture el resumen (72.5 % con recomendación) y los grupos sin cubrir.
+
+## Interfaz web (extra)
+
+**17. La interfaz en el navegador.** En la terminal:
+
+```bash
+clear && python loria_james_tarea1.py --web
+```
+
+1. Abra la página: aviso de abajo a la derecha → **Open in Browser**, o
+   pestaña **PORTS** → puerto **8000** → ícono del globo 🌐.
+2. Responda el caso C (Bajura caliente · Jardín · Pleno sol · Medio · No ·
+   Flores · Principiante) y presione **Recomendar**.
+3. Capture la recomendación principal, las alternativas y la sección
+   «¿Por qué? Encadenamiento hacia adelante» con sus tres pasos.
+4. Presione **Recomendar** sin responder todo para capturar la validación
+   (las preguntas faltantes se marcan en rojo).
+5. Baje hasta «Historial de consultas» para capturar la tabla del CSV.
+6. Vuelva a la terminal y presione `Ctrl+C` para detener el servidor.
 
 ## Si los colores se ven mal
 

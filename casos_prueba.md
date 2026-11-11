@@ -191,4 +191,4 @@ Resultado esperado: nueve líneas con ✅ y `9/9 casos correctos`.
 python -m unittest -v
 ```
 
-Resultado esperado: `Ran 39 tests ... OK`.
+Resultado esperado: `Ran 46 tests ... OK`.
