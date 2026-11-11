@@ -472,7 +472,35 @@ class TestInterfazWeb(unittest.TestCase):
         self.assertEqual(codigo, 200)
         self.assertIn("<!doctype html>", cuerpo)
         self.assertIn("¿Cuánta luz recibe ese lugar?", cuerpo)
-        self.assertNotIn("__PREGUNTAS__", cuerpo)
+        self.assertIn("Vive en bajura caliente", cuerpo)
+        for marcador in ("__PREGUNTAS__", "__FRASES__", "__AVISO__"):
+            self.assertNotIn(marcador, cuerpo)
+
+    def test_frases_cubren_todos_los_valores(self):
+        # Cada respuesta posible y cada hecho derivado tiene su frase en
+        # lenguaje natural para la explicación de la interfaz web.
+        for pregunta in sistema.PREGUNTAS:
+            for valor, _ in pregunta["opciones"]:
+                self.assertIn(valor, sistema.FRASES_WEB[pregunta["clave"]])
+        for clave, valores in sistema.HECHOS_DERIVADOS.items():
+            for valor in valores:
+                self.assertIn(valor, sistema.FRASES_WEB[clave])
+
+    def test_datos_para_explicar_en_lenguaje_natural(self):
+        datos = sistema.resultado_a_dict(resultado_de("B"), True)
+        self.assertEqual(datos["no_aplicadas"], ["R12"])
+        self.assertEqual(datos["origen_restriccion"], "R7")
+        self.assertEqual(datos["intermedias"][0]["hechos"],
+                         [{"clave": "zona", "valor": "valle_central",
+                           "origen": "usuario"}])
+        self.assertEqual(datos["intermedias"][0]["concluye"],
+                         {"clave": "clima", "valor": "templado"})
+        self.assertIn({"clave": "ambiente", "valor": "interior",
+                       "origen": "R4"}, datos["finales"][0]["hechos"])
+        datos = sistema.resultado_a_dict(resultado_de("C"), True)
+        self.assertEqual(datos["finales"][1]["repetidas"],
+                         ["Veranera", "Moño de señora"])
+        self.assertEqual(datos["finales"][1]["excluidas"], [])
 
     def test_consulta_valida_responde_y_guarda_historial(self):
         codigo, cuerpo = self.pedir("/api/consultar", self.RESPUESTAS_C)

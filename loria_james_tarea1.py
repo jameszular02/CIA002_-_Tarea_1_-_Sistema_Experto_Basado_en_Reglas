@@ -1244,6 +1244,48 @@ def validar_respuestas_web(datos):
     return (None, errores) if errores else (respuestas, [])
 
 
+# Frases en lenguaje natural para cada valor de cada hecho. Solo sirven para
+# que la interfaz web explique el razonamiento como lo diría una persona; la
+# terminal y reglas.md siguen usando la notación clave = valor.
+FRASES_WEB = {
+    "zona": {"bajura_caliente": "Vive en bajura caliente",
+             "valle_central": "Vive en el Valle Central",
+             "altura_fria": "Vive en zona alta y fría"},
+    "ubicacion": {"interior": "La planta estará dentro de la casa",
+                  "balcon_terraza": "La planta estará en un balcón o terraza",
+                  "jardin": "La planta estará en el jardín"},
+    "luz": {"pleno_sol": "Recibe sol directo varias horas",
+            "semisombra": "Recibe sol solo una parte del día",
+            "luz_indirecta": "Recibe claridad sin sol directo",
+            "poca_luz": "Recibe poca luz"},
+    "cuidado": {"poco": "Tiene poco tiempo para cuidarla",
+                "medio": "Tiene un tiempo medio para cuidarla",
+                "mucho": "Tiene mucho tiempo para cuidarla"},
+    "mascotas": {"s": "Hay mascotas o niños pequeños en casa",
+                 "n": "No hay mascotas ni niños pequeños en casa"},
+    "objetivo": {"flores": "Busca flores",
+                 "follaje": "Busca follaje decorativo",
+                 "cerca_viva": "Busca una cerca viva"},
+    "experiencia": {"principiante": "Es principiante con las plantas",
+                    "con_experiencia": "Tiene experiencia con plantas"},
+    "clima": {"calido": "Clima cálido", "templado": "Clima templado",
+              "fresco": "Clima fresco"},
+    "ambiente": {"interior": "Ambiente de interior",
+                 "exterior_sol": "Exterior con sol",
+                 "exterior_sombra": "Exterior con sombra"},
+    "restriccion": {"no_toxicas": "Solo plantas no tóxicas",
+                    "ninguna": "Cualquier planta, tóxica o no"},
+    "nivel": {"facil": "Necesita plantas fáciles de cuidar",
+              "avanzado": "Puede con plantas más exigentes"},
+}
+
+
+def hecho_a_dict(clave, hechos, origen):
+    """Un hecho como datos: clave, valor y quién lo produjo (usuario o Rn)."""
+    return {"clave": clave, "valor": hechos[clave],
+            "origen": origen.get(clave, "usuario")}
+
+
 def planta_a_dict(id_planta, aviso):
     """Datos de una planta listos para enviar al navegador."""
     planta = PLANTAS_POR_ID[id_planta]
@@ -1258,13 +1300,20 @@ def resultado_a_dict(resultado, guardado):
 
     Separa la cadena de inferencia en sus tres niveles (respuestas, reglas
     intermedias y reglas finales) para que la página pueda dibujar el
-    encadenamiento hacia adelante paso a paso.
+    encadenamiento hacia adelante paso a paso. Además del texto armado
+    ("condiciones"), envía los hechos como datos ("hechos") para que la
+    página los escriba en lenguaje natural. Solo convierte: no decide nada.
     """
     hechos, origen = resultado["hechos"], resultado["origen"]
     textos_opcion = {(p["clave"], v): t for p in PREGUNTAS
                      for v, t in p["opciones"]}
     visibles = resultado["visibles"]
     ids_visibles = {rec["regla"]["id"] for rec in visibles}
+    repetidas = {rec["regla"]["id"]: rec["repetidas"] for rec in visibles}
+
+    def nombres(ids_plantas):
+        return [PLANTAS_POR_ID[p]["nombre"] for p in ids_plantas]
+
     recomendaciones = [
         {"id": rec["regla"]["id"], "certeza": rec["regla"]["certeza"],
          "plantas": [planta_a_dict(p, aviso) for p, aviso in rec["plantas"]]}
@@ -1278,14 +1327,24 @@ def resultado_a_dict(resultado, guardado):
             {"id": regla["id"],
              "condiciones": [describir_hecho(c, hechos, origen)
                              for c in regla["si"]],
-             "conclusion": "{} = {}".format(*regla["entonces"])}
+             "conclusion": "{} = {}".format(*regla["entonces"]),
+             "hechos": [hecho_a_dict(c, hechos, origen) for c in regla["si"]],
+             "concluye": {"clave": regla["entonces"][0],
+                          "valor": regla["entonces"][1]}}
             for regla in resultado["intermedias"]],
         "finales": [
             {"id": rec["regla"]["id"], "certeza": rec["regla"]["certeza"],
              "condiciones": [describir_hecho(c, hechos, origen)
                              for c in rec["regla"]["si"]],
-             "mostrada": rec["regla"]["id"] in ids_visibles}
+             "mostrada": rec["regla"]["id"] in ids_visibles,
+             "hechos": [hecho_a_dict(c, hechos, origen)
+                        for c in rec["regla"]["si"]],
+             "excluidas": nombres(rec["excluidas"]),
+             "repetidas": nombres(repetidas.get(rec["regla"]["id"], []))}
             for rec in resultado["recomendaciones"]],
+        "no_aplicadas": [r["id"] for r in
+                         reglas_excluidas_por_restriccion(hechos)],
+        "origen_restriccion": origen.get("restriccion"),
         "notas": [linea for linea in explicar(resultado)
                   if not linea.startswith("Se activó")],
         "principal": recomendaciones[0] if recomendaciones else None,
@@ -1314,11 +1373,13 @@ def pagina_html():
     """Arma la página: las preguntas salen de PREGUNTAS (datos), no de HTML."""
     preguntas = [{"clave": p["clave"], "texto": p["texto"],
                   "opciones": p["opciones"]} for p in PREGUNTAS]
-    # "</" se escapa para que un texto nunca pueda cerrar la etiqueta <script>.
-    datos = json.dumps(preguntas, ensure_ascii=False).replace("</", "<\\/")
+    def a_json(objeto):
+        # "</" se escapa para que un texto nunca cierre la etiqueta <script>.
+        return json.dumps(objeto, ensure_ascii=False).replace("</", "<\\/")
     return (PLANTILLA_HTML
             .replace("__AVISO__", html.escape(AVISO_INICIAL))
-            .replace("__PREGUNTAS__", datos))
+            .replace("__PREGUNTAS__", a_json(preguntas))
+            .replace("__FRASES__", a_json(FRASES_WEB)))
 
 
 class ManejadorWeb(BaseHTTPRequestHandler):
@@ -1422,164 +1483,353 @@ def iniciar_interfaz_web(puerto=PUERTO_WEB):
     return 0
 
 
-PLANTILLA_HTML = """<!doctype html>
+# Plantilla de la página (diseño "etiqueta de vivero"; ver CLAUDE.md).
+# Es una cadena cruda (r"""...""") para que las expresiones regulares de JS
+# conserven sus barras invertidas.
+PLANTILLA_HTML = r"""<!doctype html>
 <html lang="es">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Recomendador de plantas</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Bricolage+Grotesque:opsz,wght@12..96,500..800&display=swap">
 <style>
+/* Tokens del diseño "etiqueta de vivero" (decisiones en CLAUDE.md). */
 :root {
-  --fondo: #f4f6f1; --superficie: #ffffff; --texto: #1c2a21;
-  --suave: #5a6b5f; --borde: #d6ded6; --acento: #2e7a4c;
-  --acento-suave: #e3f1e8; --rojo: #b42318; --rojo-suave: #fdecea;
-  --amarillo: #8a5800; --amarillo-suave: #fff3d1; --cian: #0b6b82;
-  --cian-suave: #e2f3f7; --sombra: 0 1px 3px rgba(20, 40, 25, .08);
-  --sobre-acento: #ffffff;
+  --neblina: #EDF1EE;   /* fondo: gris verdoso del bosque nuboso */
+  --cal: #FFFFFF;       /* superficie de la etiqueta y de los controles */
+  --bosque: #1E3A2A;    /* texto y estructura */
+  --musgo: #56745A;     /* texto secundario y hechos deducidos */
+  --guaria: #8E3B7E;    /* único acento: la etiqueta y la acción principal */
+  --peligro: #B3261E;   /* planta tóxica y errores */
+  --atencion: #8F5B00;  /* sin registro de toxicidad y sin conclusión */
+  --sobre-guaria: #FFFFFF;
+  --linea: #C9D4CC;
+  --seleccion: #DFE8E2;
+  --peligro-suave: #FBE9E7;
+  --atencion-suave: #FBF0D9;
+  --sombra-etiqueta: rgba(30, 58, 42, .24);
+  --f-rotulo: "Bricolage Grotesque", "Avenir Next", "Segoe UI Variable Display",
+              "Segoe UI", system-ui, sans-serif;
+  --f-texto: "Atkinson Hyperlegible", "Segoe UI", system-ui, -apple-system,
+             sans-serif;
+  --t-1: 13px; --t-2: 15px; --t-3: 17px; --t-4: 22px; --t-5: 34px;
+  --e-1: 4px; --e-2: 8px; --e-3: 12px; --e-4: 16px; --e-5: 24px;
+  --e-6: 32px; --e-7: 48px;
+  --r-control: 8px;
+  color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --fondo: #101612; --superficie: #18211b; --texto: #e6eee8;
-    --suave: #9caea1; --borde: #2b3a30; --acento: #5cc58a;
-    --acento-suave: #1b3324; --rojo: #ff8a80; --rojo-suave: #3a1916;
-    --amarillo: #ffd27a; --amarillo-suave: #392d11; --cian: #6fcfe5;
-    --cian-suave: #133039; --sombra: none; --sobre-acento: #0d1a12;
+    --neblina: #0F1913; --cal: #17251C; --bosque: #E2ECE5; --musgo: #8FB394;
+    --guaria: #C987BC; --peligro: #FF8A80; --atencion: #F2C46D;
+    --sobre-guaria: #1A0F18; --linea: #2C3D32; --seleccion: #22362A;
+    --peligro-suave: #3A1916; --atencion-suave: #382B10;
+    --sombra-etiqueta: rgba(0, 0, 0, .55);
+    color-scheme: dark;
   }
 }
-* { box-sizing: border-box; }
-body { margin: 0; background: var(--fondo); color: var(--texto);
-  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-.contenedor { max-width: 1160px; margin: 0 auto; padding: 0 16px; }
-header { background: var(--acento); color: var(--sobre-acento);
-  padding: 20px 0; }
-header h1 { margin: 0; font-size: 1.5rem; }
-header .subtitulo { margin: 2px 0 0; opacity: .9; }
-.aviso { white-space: pre-line; background: var(--amarillo-suave);
-  color: var(--amarillo); border-radius: 8px; padding: 10px 14px;
-  margin: 16px 0 0; font-size: .92rem; }
-.rejilla { display: grid; gap: 16px; margin-top: 16px; }
-@media (min-width: 920px) { .rejilla { grid-template-columns: 5fr 6fr;
-  align-items: start; } }
-.tarjeta { background: var(--superficie); border: 1px solid var(--borde);
-  border-radius: 12px; padding: 16px 18px; box-shadow: var(--sombra); }
-h2 { margin: 0 0 12px; font-size: 1.2rem; }
-h3 { margin: 18px 0 8px; font-size: 1.05rem; }
-h4 { margin: 0 0 6px; font-size: 1rem; }
-fieldset { border: 1px solid var(--borde); border-radius: 10px;
-  margin: 0 0 10px; padding: 8px 12px 12px; }
-fieldset.falta { border-color: var(--rojo); background: var(--rojo-suave); }
-legend { font-weight: 600; padding: 0 4px; }
-.opciones { display: flex; flex-wrap: wrap; gap: 8px; }
-.opcion { display: inline-flex; align-items: center; gap: 6px;
-  border: 1px solid var(--borde); border-radius: 999px; padding: 6px 12px;
-  cursor: pointer; background: var(--superficie); }
-.opcion:hover { border-color: var(--acento); }
-.opcion:has(input:checked) { border-color: var(--acento);
-  background: var(--acento-suave); font-weight: 600; }
-.opcion input { accent-color: var(--acento); margin: 0; }
-.acciones { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
-.boton { font: inherit; font-weight: 600; border: 0; border-radius: 8px;
-  padding: 10px 18px; cursor: pointer; background: var(--acento);
-  color: var(--sobre-acento); }
-.boton.secundario { background: transparent; color: var(--acento);
-  border: 1px solid var(--acento); }
-.boton:focus-visible, .opcion:focus-within { outline: 3px solid var(--cian);
+
+/* Base */
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--neblina); color: var(--bosque);
+  font: var(--t-3)/1.55 var(--f-texto); }
+h1, h2, h3 { font-family: var(--f-rotulo); line-height: 1.15; margin: 0;
+  letter-spacing: -0.01em; }
+p { margin: 0; }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 3px solid var(--guaria); outline-offset: 2px; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; }
+.pagina { max-width: 1040px; margin: 0 auto; padding: 0 var(--e-4); }
+
+/* Encabezado: tranquilo, sin banda de color */
+.cabecera { padding: var(--e-6) 0 var(--e-5);
+  border-bottom: 1px solid var(--linea); }
+.cabecera h1 { font-size: var(--t-4); font-weight: 700; }
+.lema { color: var(--musgo); font-size: var(--t-2); margin-top: var(--e-1);
+  max-width: 70ch; }
+.aviso { color: var(--musgo); font-size: var(--t-1); margin-top: var(--e-3);
+  max-width: 70ch; white-space: pre-line; }
+
+/* Pantalla de preguntas: una a la vez */
+.consulta { max-width: 640px; padding: var(--e-6) 0 var(--e-7); }
+.progreso { list-style: none; display: flex; gap: var(--e-1); margin: 0;
+  padding: 0; }
+.progreso li { flex: 1; }
+.progreso button { display: block; width: 100%; height: 24px; padding: 9px 0;
+  border: 0; background: none; cursor: pointer; }
+.progreso button::after { content: ""; display: block; height: 6px;
+  border-radius: 3px; background: var(--linea); }
+.progreso button.respondida::after { background: var(--musgo); }
+.progreso button[aria-current="step"]::after { background: var(--bosque); }
+.progreso button:disabled { cursor: default; }
+.contador { color: var(--musgo); font-size: var(--t-2); margin-top: var(--e-2); }
+.pregunta { border: 0; margin: var(--e-2) 0 0; padding: 0; min-width: 0; }
+.pregunta legend { float: left; width: 100%; padding: 0;
+  font-family: var(--f-rotulo); font-weight: 700; line-height: 1.12;
+  font-size: clamp(26px, 6vw, var(--t-5)); letter-spacing: -0.02em;
+  margin-bottom: var(--e-5); }
+.pregunta legend:focus { outline: none; }
+.opciones { clear: both; display: grid; gap: var(--e-2); }
+.opcion { position: relative; display: grid; grid-template-columns: auto 1fr;
+  align-items: center; gap: var(--e-3); padding: var(--e-3) var(--e-4);
+  background: var(--cal); border: 1px solid var(--linea);
+  border-radius: var(--r-control); cursor: pointer;
+  transition: border-color .12s, background-color .12s; }
+.opcion:hover { border-color: var(--musgo); }
+.opcion:has(input:checked) { background: var(--seleccion);
+  border-color: var(--bosque); box-shadow: inset 0 0 0 1px var(--bosque); }
+.opcion:has(input:focus-visible) { outline: 3px solid var(--guaria);
   outline-offset: 2px; }
-.errores { background: var(--rojo-suave); color: var(--rojo);
-  border-radius: 8px; padding: 8px 14px; margin-top: 12px; }
-.errores ul { margin: 0; padding-left: 18px; }
-.vacio, .suave { color: var(--suave); }
-.recomendacion { border: 1px solid var(--borde); border-radius: 10px;
-  padding: 12px 14px; margin-bottom: 10px; }
-.recomendacion.principal { border: 2px solid var(--acento);
-  background: var(--acento-suave); }
-.barra { height: 6px; background: var(--borde); border-radius: 3px;
-  overflow: hidden; margin: 4px 0 10px; }
-.barra span { display: block; height: 100%; background: var(--acento); }
-.plantas { list-style: none; margin: 0; padding: 0; display: grid;
-  gap: 8px; }
-.plantas li { background: var(--superficie); border: 1px solid var(--borde);
-  border-radius: 8px; padding: 8px 10px; }
-.plantas em { color: var(--suave); }
-.tip { font-size: .92rem; margin-top: 2px; }
-.aviso-planta { display: inline-block; margin-top: 6px; font-size: .85rem;
-  font-weight: 600; border-radius: 6px; padding: 2px 8px; }
-.aviso-planta.toxica { background: var(--rojo-suave); color: var(--rojo); }
-.aviso-planta.sin_registro { background: var(--amarillo-suave);
-  color: var(--amarillo); }
-.sin-conclusion { border: 2px solid var(--amarillo);
-  background: var(--amarillo-suave); border-radius: 10px; padding: 12px 14px; }
-.sin-conclusion p { margin: 6px 0 0; }
-.paso { border-left: 3px solid var(--cian); padding: 2px 0 2px 12px;
-  margin: 10px 0; }
-.paso > strong { display: block; margin-bottom: 6px; color: var(--cian); }
-.fila { display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
-  margin: 4px 0; }
-.paso .fila + .fila { border-top: 1px dashed var(--borde); padding-top: 6px; }
-.chip { border-radius: 6px; padding: 1px 8px; font-size: .85rem;
-  background: var(--fondo); border: 1px solid var(--borde);
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  overflow-wrap: anywhere; }
-.chip.derivado { background: var(--cian-suave); border-color: var(--cian); }
-.regla { border-radius: 6px; padding: 1px 8px; font-size: .85rem;
-  font-weight: 700; background: var(--acento); color: var(--sobre-acento); }
-.regla.oculta { background: var(--suave); color: var(--superficie); }
-.flecha { color: var(--suave); }
-.notas { margin: 6px 0 0; padding-left: 18px; font-size: .92rem; }
-.tabla-envoltura { overflow-x: auto; }
-table { border-collapse: collapse; width: 100%; font-size: .9rem; }
-th, td { text-align: left; border-bottom: 1px solid var(--borde);
-  padding: 6px 8px; vertical-align: top; }
-th { color: var(--suave); font-weight: 600; }
-td.pequeno { font-size: .8rem; color: var(--suave); min-width: 260px; }
-footer { color: var(--suave); font-size: .85rem; padding: 20px 0 28px; }
-code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.opcion input { position: absolute; opacity: 0; width: 1px; height: 1px;
+  margin: 0; }
+.tecla { display: grid; place-items: center; width: 32px; height: 32px;
+  border-radius: 6px; border: 1px solid var(--linea);
+  font-family: var(--f-rotulo); font-weight: 700; font-size: var(--t-2);
+  color: var(--musgo); }
+.opcion:has(input:checked) .tecla { background: var(--bosque);
+  border-color: var(--bosque); color: var(--neblina); }
+.opcion-texto { display: grid; }
+.opcion-detalle { color: var(--musgo); font-size: var(--t-2); }
+.error-campo { color: var(--peligro); font-size: var(--t-2); font-weight: 700;
+  margin-top: var(--e-3); }
+.navegacion { display: flex; justify-content: space-between; align-items: center;
+  gap: var(--e-3); margin-top: var(--e-5); }
+.entrando { animation: entrar 180ms ease-out; }
+@keyframes entrar { from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; } }
+
+/* Botones, enlaces y alertas */
+.boton { border: 0; border-radius: var(--r-control); min-height: 48px;
+  padding: var(--e-3) var(--e-5); font-weight: 700; cursor: pointer; }
+.boton.principal { background: var(--guaria); color: var(--sobre-guaria); }
+.boton.principal:hover { filter: brightness(1.08); }
+.boton.secundario { background: transparent; color: var(--bosque);
+  box-shadow: inset 0 0 0 1px var(--linea); }
+.boton.secundario:hover { box-shadow: inset 0 0 0 1px var(--bosque); }
+.boton:disabled { opacity: .65; cursor: progress; }
+.enlace { background: none; border: 0; padding: 0; color: var(--bosque);
+  font-size: var(--t-2); text-decoration: underline;
+  text-underline-offset: 3px; cursor: pointer; white-space: nowrap; }
+.alerta { border-radius: var(--r-control); padding: var(--e-3) var(--e-4);
+  font-size: var(--t-2); margin-top: var(--e-3); }
+.alerta.peligro { background: var(--peligro-suave); color: var(--peligro); }
+.aviso-planta { display: inline-block; font-size: var(--t-1); font-weight: 700;
+  border-radius: 4px; padding: 2px 8px; margin-top: var(--e-2); }
+.aviso-planta.toxica { background: var(--peligro-suave); color: var(--peligro); }
+.aviso-planta.sin_registro { background: var(--atencion-suave);
+  color: var(--atencion); }
+.aviso-planta.corto { margin: 0 0 0 var(--e-1); padding: 0 6px; }
+.regla { display: inline-flex; align-items: center; border-radius: 4px;
+  padding: 1px 8px; font-family: var(--f-rotulo); font-weight: 700;
+  font-size: var(--t-1); background: var(--bosque); color: var(--neblina);
+  white-space: nowrap; }
+.regla.decisiva { background: var(--guaria); color: var(--sobre-guaria); }
+.regla.origen { background: transparent; color: var(--musgo); font-weight: 600;
+  box-shadow: inset 0 0 0 1px var(--linea); }
+.certeza-texto { color: var(--musgo); font-size: var(--t-2);
+  white-space: nowrap; }
+
+/* Pantalla de resultado */
+.resultado { padding: var(--e-6) 0 var(--e-7); display: grid; gap: var(--e-7); }
+.resultado:focus { outline: none; }
+@media (min-width: 880px) {
+  .resultado { grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+    align-items: start; }
+}
+.columna { display: grid; gap: var(--e-6); align-content: start; }
+
+/* El elemento memorable: la etiqueta de vivero */
+.etiqueta-sombra { filter: drop-shadow(0 14px 16px var(--sombra-etiqueta));
+  animation: clavar 460ms cubic-bezier(.2, .8, .2, 1) both; }
+@keyframes clavar {
+  from { opacity: 0; transform: translateY(-18px) rotate(-1.5deg); }
+  to { opacity: 1; transform: none; } }
+.etiqueta { background: var(--cal); padding-bottom: var(--e-7);
+  clip-path: polygon(8px 0, calc(100% - 8px) 0, 100% 8px,
+    100% calc(100% - 36px), 50% 100%, 0 calc(100% - 36px), 0 8px); }
+.etiqueta-banda { position: relative; display: flex; align-items: flex-end;
+  justify-content: space-between; gap: var(--e-4);
+  padding: var(--e-6) var(--e-5) var(--e-4);
+  background: var(--guaria); color: var(--sobre-guaria); }
+.perforacion { position: absolute; top: 10px; left: 50%; width: 14px;
+  height: 14px; margin-left: -7px; border-radius: 50%;
+  background: var(--neblina); box-shadow: inset 0 2px 3px rgba(0, 0, 0, .3); }
+.etiqueta-tipo { font-size: var(--t-4); font-weight: 800; }
+.etiqueta-regla { font-size: var(--t-2); margin-top: var(--e-1); }
+.certeza { text-align: right; font-size: var(--t-1); line-height: 1.3; }
+.certeza strong { display: block; font-family: var(--f-rotulo);
+  font-size: var(--t-5); font-weight: 800; line-height: 1; }
+.etiqueta-plantas { list-style: none; margin: 0; padding: 0 var(--e-5); }
+.etiqueta-plantas > li { padding: var(--e-4) 0;
+  border-bottom: 1px solid var(--linea); }
+.etiqueta-plantas > li:last-child { border-bottom: 0; }
+.planta-nombre { font-size: var(--t-4); font-weight: 700; }
+.planta-cientifico { color: var(--musgo); font-size: var(--t-2);
+  font-style: italic; }
+.planta-tip { font-size: var(--t-2); margin-top: var(--e-2); max-width: 60ch; }
+.etiqueta.en-blanco .etiqueta-banda { background: var(--atencion-suave);
+  color: var(--atencion); }
+.etiqueta-cuerpo { display: grid; gap: var(--e-3);
+  padding: var(--e-5) var(--e-5) 0; font-size: var(--t-2); }
+.etiqueta-cuerpo h3 { font-size: var(--t-4); font-weight: 700; }
+
+/* Alternativas: filas compactas */
+.titulo-bloque { font-size: var(--t-3); font-weight: 700;
+  margin-bottom: var(--e-3); }
+.alternativas { list-style: none; margin: 0; padding: 0;
+  border-top: 1px solid var(--linea); }
+.alternativas > li { border-bottom: 1px solid var(--linea); }
+.alternativas summary { list-style: none; cursor: pointer;
+  display: grid; grid-template-columns: auto 1fr auto; gap: var(--e-3);
+  align-items: baseline; padding: var(--e-3) 0; }
+.alternativas summary::-webkit-details-marker { display: none; }
+.alternativas summary::after { content: "+"; font-family: var(--f-rotulo);
+  font-weight: 700; font-size: var(--t-4); line-height: 1; color: var(--musgo); }
+.alternativas details[open] summary::after { content: "–"; }
+.alt-meta { display: inline-flex; align-items: baseline; gap: var(--e-2); }
+.alt-plantas { font-size: var(--t-2); }
+.alt-detalle { list-style: none; margin: 0; padding: 0 0 var(--e-4); }
+.alt-detalle > li { padding: var(--e-2) 0 var(--e-2) var(--e-4);
+  border-left: 2px solid var(--linea); }
+.alt-detalle .planta-nombre { font-size: var(--t-3); }
+
+.acciones { display: flex; flex-wrap: wrap; gap: var(--e-3);
+  align-items: center; }
+.guardado { color: var(--musgo); font-size: var(--t-1); margin-top: var(--e-2); }
+
+/* Razonamiento: tres tramos en secuencia */
+.razonamiento > h2 { font-size: var(--t-4); font-weight: 700;
+  margin-bottom: var(--e-5); }
+.tramos { list-style: none; margin: 0; padding: 0; counter-reset: tramo; }
+.tramo { position: relative; counter-increment: tramo;
+  padding: 0 0 var(--e-6) 48px; }
+.tramo::before { content: counter(tramo); position: absolute; left: 0;
+  top: -3px; width: 32px; height: 32px; border-radius: 50%; display: grid;
+  place-items: center; font-family: var(--f-rotulo); font-weight: 800;
+  background: var(--cal); box-shadow: inset 0 0 0 2px var(--bosque); }
+.tramo::after { content: ""; position: absolute; left: 15px; top: 36px;
+  bottom: 6px; width: 2px; background: var(--linea); }
+.tramo:last-child { padding-bottom: 0; }
+.tramo:last-child::after { display: none; }
+.tramo h3 { font-size: var(--t-3); font-weight: 700;
+  margin-bottom: var(--e-3); }
+.lista-respuestas, .deducciones, .condiciones, .notas { list-style: none;
+  margin: 0; padding: 0; display: grid; gap: var(--e-2);
+  font-size: var(--t-2); }
+.lista-respuestas li { display: flex; justify-content: space-between;
+  align-items: baseline; gap: var(--e-3); }
+.deducciones { gap: var(--e-4); }
+.deduccion { display: grid; align-items: center; gap: var(--e-1) var(--e-3);
+  grid-template-columns: minmax(0, 1fr) 6em minmax(0, 1fr); }
+.paso-regla { display: inline-flex; align-items: center; gap: var(--e-1);
+  justify-self: center; }
+.flecha { color: var(--musgo); }
+@media (max-width: 560px) {
+  .deduccion { grid-template-columns: auto minmax(0, 1fr); }
+  .paso-regla { justify-self: start; }
+  .deduccion .causas { grid-column: 1 / -1; }
+}
+.hecho-derivado { font-weight: 700; }
+.regla-final + .regla-final { margin-top: var(--e-4); }
+.regla-final-cabecera { display: flex; flex-wrap: wrap; align-items: center;
+  gap: var(--e-2); }
+.condiciones { margin-top: var(--e-3); }
+.condiciones li { display: flex; flex-wrap: wrap; align-items: center;
+  gap: var(--e-2); }
+.condiciones li::before { content: "✓"; color: var(--musgo);
+  font-weight: 700; }
+.otras-reglas { margin-top: var(--e-4); }
+.otras-reglas summary { margin-bottom: var(--e-3); }
+.desplegable summary { list-style: none; cursor: pointer; font-size: var(--t-2); }
+.desplegable summary::-webkit-details-marker { display: none; }
+.desplegable summary::before { content: "+"; display: inline-block; width: 1em;
+  font-family: var(--f-rotulo); font-weight: 700; color: var(--musgo); }
+.desplegable[open] summary::before { content: "–"; }
+.notas { margin-top: var(--e-4); color: var(--musgo); max-width: 60ch; }
+
+/* Historial */
+.historial { border-top: 1px solid var(--linea);
+  padding: var(--e-6) 0 var(--e-7); }
+.historial h2 { font-size: var(--t-4); font-weight: 700; }
+.historial .nota { color: var(--musgo); font-size: var(--t-2);
+  margin: var(--e-1) 0 var(--e-4); }
+.vacio { color: var(--musgo); font-size: var(--t-2); }
+.tabla { width: 100%; border-collapse: collapse; font-size: var(--t-2); }
+.tabla th { text-align: left; font-size: var(--t-1); font-weight: 700;
+  color: var(--musgo); padding: var(--e-2);
+  border-bottom: 1px solid var(--linea); }
+.tabla td { padding: var(--e-3) var(--e-2); vertical-align: top;
+  border-bottom: 1px solid var(--linea); }
+.tabla td.reglas { white-space: nowrap; }
+.tabla ul { margin: var(--e-2) 0 0; padding-left: var(--e-4); }
+@media (max-width: 720px) {
+  .tabla thead { position: absolute; width: 1px; height: 1px;
+    overflow: hidden; clip: rect(0 0 0 0); }
+  .tabla, .tabla tbody, .tabla tr, .tabla td { display: block; width: 100%; }
+  .tabla tr { padding: var(--e-3) 0; border-bottom: 1px solid var(--linea); }
+  .tabla td { border: 0; padding: var(--e-1) 0; }
+  .tabla td.reglas { white-space: normal; }
+  .tabla td::before { content: attr(data-etiqueta); display: block;
+    font-size: var(--t-1); font-weight: 700; color: var(--musgo); }
+}
+.pie { color: var(--musgo); font-size: var(--t-1);
+  padding: var(--e-5) 0 var(--e-7); border-top: 1px solid var(--linea); }
+.pie p { max-width: 70ch; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important;
+    transition: none !important; scroll-behavior: auto !important; }
+}
 </style>
 </head>
 <body>
-<header>
-  <div class="contenedor">
-    <h1>🌿 Recomendador de plantas ornamentales</h1>
-    <p class="subtitulo">Sistema experto basado en reglas para hogares
-      costarricenses</p>
-    <p class="aviso">__AVISO__</p>
-  </div>
+<div class="pagina">
+<header class="cabecera">
+  <h1>Recomendador de plantas ornamentales</h1>
+  <p class="lema">Responda siete preguntas sobre su espacio y le digo qué
+    planta sembrar, y por qué.</p>
+  <p class="aviso">__AVISO__</p>
 </header>
 
-<main class="contenedor rejilla">
-  <section class="tarjeta" aria-labelledby="titulo-consulta">
-    <h2 id="titulo-consulta">Consulta</h2>
-    <form id="formulario" novalidate></form>
-    <div id="errores" class="errores" role="alert" hidden></div>
-    <div class="acciones">
-      <button type="submit" form="formulario" class="boton">Recomendar</button>
-      <button type="button" id="nueva" class="boton secundario">Nueva
-        consulta</button>
-    </div>
+<main>
+  <section id="pantalla-consulta" class="consulta" aria-label="Consulta">
+    <form id="formulario" novalidate>
+      <ol class="progreso" id="progreso" aria-label="Avance de la consulta"></ol>
+      <p class="contador" id="contador" aria-live="polite"></p>
+      <div id="contenedor-pregunta"></div>
+      <p class="error-campo" id="error-pregunta" role="alert" hidden></p>
+      <p class="alerta peligro" id="error-servidor" role="alert" hidden></p>
+      <div class="navegacion">
+        <button type="button" class="boton secundario" id="atras">Atrás</button>
+        <button type="submit" class="boton principal" id="siguiente">Siguiente</button>
+      </div>
+    </form>
   </section>
-  <section id="resultado" class="tarjeta resultado" aria-live="polite"></section>
+  <section id="pantalla-resultado" class="resultado" tabindex="-1"
+           aria-label="Resultado de la consulta" hidden></section>
 </main>
 
-<section class="contenedor" style="margin-top:16px">
-  <div class="tarjeta">
-    <h2>Historial de consultas</h2>
-    <p class="suave">Últimas consultas guardadas en
-      <code>historial_consultas.csv</code>.</p>
-    <div class="tabla-envoltura">
-      <table>
-        <thead><tr><th>Fecha y hora</th><th>Recomendación principal</th>
-          <th>Reglas activadas</th><th>Respuestas</th></tr></thead>
-        <tbody id="historial"></tbody>
-      </table>
-    </div>
-  </div>
+<section class="historial" aria-labelledby="titulo-historial">
+  <h2 id="titulo-historial">Consultas anteriores</h2>
+  <p class="nota">Cada consulta se guarda en historial_consultas.csv.</p>
+  <div id="historial"></div>
 </section>
 
-<footer class="contenedor">James Loria · CIA02 – Introducción a la IA,
-  UCreativa · Toxicidad: ASPCA (consulta 9 nov 2026)</footer>
+<footer class="pie"><p>Hecho por James Loria para el curso CIA02 Introducción
+  a la IA de UCreativa. La toxicidad se basa en la base de datos de ASPCA,
+  consultada el 9 de noviembre de 2026.</p></footer>
+</div>
 
 <script>
 const PREGUNTAS = __PREGUNTAS__;
+const FRASES = __FRASES__;
+const MOVIMIENTO = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const estado = { paso: 0, respuestas: {} };
 const $ = (selector) => document.querySelector(selector);
 
 // Crea un elemento con textContent (nunca innerHTML con datos).
@@ -1590,216 +1840,521 @@ function el(etiqueta, clase, texto) {
   return nodo;
 }
 
-function construirFormulario() {
-  const formulario = $("#formulario");
+// "Bajura caliente (menos de 800 msnm)" -> ["Bajura caliente", "menos de 800 msnm"]
+function partirOpcion(texto) {
+  const partes = texto.match(/^(.*?)\s*\((.*)\)$/);
+  return partes ? [partes[1], partes[2]] : [texto, ""];
+}
+
+function frase(clave, valor) {
+  return (FRASES[clave] && FRASES[clave][valor]) || `${clave} = ${valor}`;
+}
+
+function unirConY(lista) {
+  if (lista.length < 2) return lista.join("");
+  return `${lista.slice(0, -1).join(", ")} y ${lista[lista.length - 1]}`;
+}
+
+// Une frases completas: "Tiene mucho tiempo… y tiene experiencia…".
+function unirFrases(frases) {
+  return unirConY(frases.map((texto, i) =>
+    i ? texto.charAt(0).toLowerCase() + texto.slice(1) : texto));
+}
+
+function insigniaRegla(texto, variante) {
+  return el("span", variante ? `regla ${variante}` : "regla", texto);
+}
+
+function respondida(clave) { return estado.respuestas[clave] !== undefined; }
+
+// ---- Pantalla de preguntas -------------------------------------------------
+
+function pintarProgreso() {
+  const lista = $("#progreso");
+  lista.replaceChildren();
   PREGUNTAS.forEach((pregunta, i) => {
-    const grupo = el("fieldset", "pregunta");
-    grupo.dataset.clave = pregunta.clave;
-    grupo.append(el("legend", null, `${i + 1}. ${pregunta.texto}`));
-    const opciones = el("div", "opciones");
-    pregunta.opciones.forEach(([valor, texto]) => {
-      const etiqueta = el("label", "opcion");
-      const radio = el("input");
-      radio.type = "radio"; radio.name = pregunta.clave; radio.value = valor;
-      radio.addEventListener("change", () => grupo.classList.remove("falta"));
-      etiqueta.append(radio, el("span", null, texto));
-      opciones.append(etiqueta);
+    const boton = el("button");
+    boton.type = "button";
+    if (respondida(pregunta.clave)) boton.classList.add("respondida");
+    if (i === estado.paso) boton.setAttribute("aria-current", "step");
+    boton.disabled = !PREGUNTAS.slice(0, i).every((p) => respondida(p.clave));
+    boton.setAttribute("aria-label", `Pregunta ${i + 1}: ${pregunta.texto}` +
+      (respondida(pregunta.clave) ? " (respondida)" : ""));
+    boton.addEventListener("click", () => irA(i));
+    const item = el("li");
+    item.append(boton);
+    lista.append(item);
+  });
+}
+
+function pintarPregunta(animar) {
+  const pregunta = PREGUNTAS[estado.paso];
+  $("#contador").textContent =
+    `Pregunta ${estado.paso + 1} de ${PREGUNTAS.length}`;
+  const grupo = el("fieldset", animar && MOVIMIENTO ? "pregunta entrando"
+                                                   : "pregunta");
+  const titulo = el("legend", null, pregunta.texto);
+  titulo.id = "titulo-pregunta";
+  titulo.tabIndex = -1;
+  const opciones = el("div", "opciones");
+  pregunta.opciones.forEach(([valor, texto], i) => {
+    const etiqueta = el("label", "opcion");
+    const radio = el("input");
+    radio.type = "radio";
+    radio.name = pregunta.clave;
+    radio.value = valor;
+    radio.checked = estado.respuestas[pregunta.clave] === valor;
+    radio.addEventListener("change", () => {
+      estado.respuestas[pregunta.clave] = valor;
+      ocultarError();
+      pintarProgreso();
     });
-    grupo.append(opciones);
-    formulario.append(grupo);
+    const tecla = el("span", "tecla", pregunta.opciones.length === 2 &&
+                     /^[sn]$/.test(valor) ? valor : String(i + 1));
+    tecla.setAttribute("aria-hidden", "true");
+    const [principal, detalle] = partirOpcion(texto);
+    const textos = el("span", "opcion-texto");
+    textos.append(el("span", null, principal));
+    if (detalle) textos.append(el("span", "opcion-detalle", detalle));
+    etiqueta.append(radio, tecla, textos);
+    opciones.append(etiqueta);
+  });
+  grupo.append(titulo, opciones);
+  $("#contenedor-pregunta").replaceChildren(grupo);
+  $("#atras").style.visibility = estado.paso === 0 ? "hidden" : "visible";
+  $("#siguiente").textContent = estado.paso === PREGUNTAS.length - 1
+    ? "Ver mi recomendación" : "Siguiente";
+  pintarProgreso();
+}
+
+function radios() {
+  return [...document.querySelectorAll("#contenedor-pregunta input")];
+}
+
+function mostrarError(texto) {
+  const error = $("#error-pregunta");
+  error.textContent = texto;
+  error.hidden = false;
+  radios().forEach((radio) => {
+    radio.setAttribute("aria-invalid", "true");
+    radio.setAttribute("aria-describedby", "error-pregunta");
   });
 }
 
-function mostrarErrores(lista) {
-  const caja = $("#errores");
-  caja.replaceChildren();
-  caja.hidden = lista.length === 0;
-  if (!lista.length) return;
-  const ul = el("ul");
-  lista.forEach((texto) => ul.append(el("li", null, texto)));
-  caja.append(ul);
+function ocultarError() {
+  $("#error-pregunta").hidden = true;
+  radios().forEach((radio) => {
+    radio.removeAttribute("aria-invalid");
+    radio.removeAttribute("aria-describedby");
+  });
 }
 
-function resultadoVacio() {
-  $("#resultado").replaceChildren(el("h2", null, "Resultado"),
-    el("p", "vacio",
-       `Responda las ${PREGUNTAS.length} preguntas y presione «Recomendar».`));
+function mostrarPantalla(nombre) {
+  $("#pantalla-consulta").hidden = nombre !== "consulta";
+  $("#pantalla-resultado").hidden = nombre !== "resultado";
 }
 
-function tarjetaRecomendacion(rec, esPrincipal, numero) {
-  const caja = el("article", esPrincipal ? "recomendacion principal"
-                                         : "recomendacion");
-  caja.append(el(esPrincipal ? "h3" : "h4", null, esPrincipal
-    ? `Recomendación principal (${rec.id}, certeza ${rec.certeza}%)`
-    : `${numero}. ${rec.id} (certeza ${rec.certeza}%)`));
-  const barra = el("div", "barra");
-  barra.setAttribute("aria-hidden", "true");
-  const relleno = el("span");
-  relleno.style.width = `${rec.certeza}%`;
-  barra.append(relleno);
-  caja.append(barra);
-  const lista = el("ul", "plantas");
-  rec.plantas.forEach((planta) => {
-    const li = el("li");
-    li.append(el("strong", null, planta.nombre), " ",
-              el("em", null, `(${planta.cientifico})`),
-              el("div", "tip", planta.tip));
-    if (planta.aviso) {
-      li.append(el("span", `aviso-planta ${planta.aviso}`,
-                   planta.aviso_texto));
+function irA(indice) {
+  estado.paso = indice;
+  $("#error-servidor").hidden = true;
+  mostrarPantalla("consulta");
+  pintarPregunta(true);
+  ocultarError();
+  $("#titulo-pregunta").focus({ preventScroll: true });
+}
+
+async function avanzar(evento) {
+  evento.preventDefault();
+  const pregunta = PREGUNTAS[estado.paso];
+  if (!respondida(pregunta.clave)) {
+    mostrarError("Elija una opción para continuar.");
+    radios()[0].focus();
+    return;
+  }
+  if (estado.paso < PREGUNTAS.length - 1) { irA(estado.paso + 1); return; }
+  const falta = PREGUNTAS.findIndex((p) => !respondida(p.clave));
+  if (falta !== -1) {
+    irA(falta);
+    mostrarError("Falta esta pregunta para poder recomendarle una planta.");
+    return;
+  }
+  await consultar();
+}
+
+async function consultar() {
+  const boton = $("#siguiente");
+  boton.disabled = true;
+  boton.textContent = "Buscando su planta…";
+  try {
+    const respuesta = await fetch("api/consultar", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(estado.respuestas) });
+    const datos = await respuesta.json();
+    if (!respuesta.ok) {
+      mostrarErrorServidor((datos.errores || []).join(" ") ||
+                           "El programa no aceptó la consulta.");
+      return;
     }
-    lista.append(li);
-  });
-  caja.append(lista);
-  return caja;
+    pintarResultado(datos);
+    cargarHistorial();
+  } catch (error) {
+    mostrarErrorServidor("No pude conectarme con el programa. Revise que " +
+      "siga corriendo en la terminal y vuelva a intentar.");
+  } finally {
+    boton.disabled = false;
+    boton.textContent = "Ver mi recomendación";
+  }
 }
 
-function chips(fila, textos, clase) {
-  textos.forEach((texto) => {
-    fila.append(el("span", texto.includes("[de ") ? `chip derivado ${clase}`
-                                                  : `chip ${clase}`, texto));
-  });
+function mostrarErrorServidor(texto) {
+  const alerta = $("#error-servidor");
+  alerta.textContent = texto;
+  alerta.hidden = false;
 }
 
-function cadenaDeInferencia(r) {
-  const seccion = el("section");
-  seccion.append(el("h3", null, "¿Por qué? Encadenamiento hacia adelante"));
+// ---- Pantalla de resultado -------------------------------------------------
 
-  const paso1 = el("div", "paso");
-  paso1.append(el("strong", null, "1. Respuestas del usuario"));
-  const fila1 = el("div", "fila");
-  chips(fila1, r.respuestas.map((x) => `${x.clave} = ${x.valor}`), "");
-  paso1.append(fila1);
+function avisoPlanta(planta) {
+  return el("p", `aviso-planta ${planta.aviso}`, planta.aviso_texto);
+}
 
-  const paso2 = el("div", "paso");
-  paso2.append(el("strong", null,
-                  "2. Reglas intermedias: deducen hechos nuevos"));
-  r.intermedias.forEach((regla) => {
-    const fila = el("div", "fila");
-    chips(fila, regla.condiciones, "");
-    fila.append(el("span", "flecha", "→"), el("span", "regla", regla.id),
-                el("span", "flecha", "→"),
-                el("span", "chip derivado", regla.conclusion));
-    paso2.append(fila);
+function itemPlanta(planta) {
+  const item = el("li");
+  item.append(el("h3", "planta-nombre", planta.nombre),
+              el("p", "planta-cientifico", planta.cientifico),
+              el("p", "planta-tip", planta.tip));
+  if (planta.aviso) item.append(avisoPlanta(planta));
+  return item;
+}
+
+function etiquetaVivero(recomendacion) {
+  const sombra = el("div", "etiqueta-sombra");
+  const etiqueta = el("article", "etiqueta");
+  etiqueta.setAttribute("aria-labelledby", "titulo-etiqueta");
+  const banda = el("header", "etiqueta-banda");
+  const perforacion = el("span", "perforacion");
+  perforacion.setAttribute("aria-hidden", "true");
+  const izquierda = el("div");
+  const titulo = el("h2", "etiqueta-tipo", "Le recomiendo");
+  titulo.id = "titulo-etiqueta";
+  izquierda.append(titulo,
+    el("p", "etiqueta-regla", `Regla ${recomendacion.id}`));
+  const certeza = el("p", "certeza");
+  certeza.append(el("strong", null, `${recomendacion.certeza} %`),
+                 "de certeza");
+  banda.append(perforacion, izquierda, certeza);
+  const lista = el("ul", "etiqueta-plantas");
+  recomendacion.plantas.forEach((planta) => lista.append(itemPlanta(planta)));
+  etiqueta.append(banda, lista);
+  sombra.append(etiqueta);
+  return sombra;
+}
+
+function etiquetaEnBlanco(resultado) {
+  const sombra = el("div", "etiqueta-sombra");
+  const etiqueta = el("article", "etiqueta en-blanco");
+  etiqueta.setAttribute("aria-labelledby", "titulo-etiqueta");
+  const banda = el("header", "etiqueta-banda");
+  const perforacion = el("span", "perforacion");
+  perforacion.setAttribute("aria-hidden", "true");
+  const titulo = el("h2", "etiqueta-tipo", "Sin recomendación");
+  titulo.id = "titulo-etiqueta";
+  banda.append(perforacion, titulo);
+  const cuerpo = el("div", "etiqueta-cuerpo");
+  const sugerencia = el("p");
+  sugerencia.append(el("strong", null, "Sugerencia: "), resultado.sugerencia);
+  cuerpo.append(
+    el("h3", null, "No tengo una planta para esta combinación"),
+    el("p", null, "Ninguna regla de mi base de conocimiento cubre sus " +
+       "respuestas, así que prefiero no inventar una recomendación."),
+    sugerencia);
+  etiqueta.append(banda, cuerpo);
+  sombra.append(etiqueta);
+  return sombra;
+}
+
+function bloqueAlternativas(alternativas) {
+  const bloque = el("section");
+  bloque.append(el("h2", "titulo-bloque", "También le pueden servir"));
+  const lista = el("ul", "alternativas");
+  alternativas.forEach((alternativa) => {
+    const detalles = el("details");
+    const resumen = el("summary");
+    const meta = el("span", "alt-meta");
+    meta.append(insigniaRegla(alternativa.id),
+                el("span", "certeza-texto", `${alternativa.certeza} %`));
+    const nombres = el("span", "alt-plantas");
+    alternativa.plantas.forEach((planta, i) => {
+      if (i) nombres.append(", ");
+      nombres.append(planta.nombre);
+      // El aviso de seguridad se ve aunque la fila esté cerrada.
+      if (planta.aviso) {
+        nombres.append(el("span", `aviso-planta corto ${planta.aviso}`,
+          planta.aviso === "toxica" ? "tóxica" : "sin registro"));
+      }
+    });
+    resumen.append(meta, nombres);
+    const detalle = el("ul", "alt-detalle");
+    alternativa.plantas.forEach((planta) => detalle.append(itemPlanta(planta)));
+    detalles.append(resumen, detalle);
+    const item = el("li");
+    item.append(detalles);
+    lista.append(item);
   });
+  bloque.append(lista);
+  return bloque;
+}
 
-  const paso3 = el("div", "paso");
-  paso3.append(el("strong", null,
-                  "3. Reglas finales: usan los hechos derivados [de Rn]"));
-  if (!r.finales.length) {
-    paso3.append(el("p", "suave", "Ninguna regla final se cumplió."));
-  }
-  r.finales.forEach((regla) => {
-    const fila = el("div", "fila");
-    fila.append(el("span", regla.mostrada ? "regla" : "regla oculta",
-                   `${regla.id} · ${regla.certeza}%`),
-                el("span", "flecha", "porque"));
-    chips(fila, regla.condiciones, "");
-    paso3.append(fila);
+function acciones(resultado) {
+  const contenedor = el("div");
+  const fila = el("div", "acciones");
+  const otra = el("button", "boton principal", "Hacer otra consulta");
+  otra.type = "button";
+  otra.addEventListener("click", nuevaConsulta);
+  const cambiar = el("button", "boton secundario", "Cambiar respuestas");
+  cambiar.type = "button";
+  cambiar.addEventListener("click", () => irA(PREGUNTAS.length - 1));
+  fila.append(otra, cambiar);
+  contenedor.append(fila, el("p", "guardado", resultado.guardado
+    ? "Consulta guardada en el historial."
+    : "No pude guardar el historial; revise la terminal."));
+  return contenedor;
+}
+
+function reglaFinal(regla, decisiva) {
+  const bloque = el("div", "regla-final");
+  const cabecera = el("p", "regla-final-cabecera");
+  cabecera.append(insigniaRegla(regla.id, decisiva ? "decisiva" : ""),
+                  el("span", "certeza-texto", `${regla.certeza} % de certeza`));
+  const condiciones = el("ul", "condiciones");
+  regla.hechos.forEach((hecho) => {
+    const item = el("li");
+    item.append(el("span", null, frase(hecho.clave, hecho.valor)));
+    if (hecho.origen !== "usuario") {
+      item.append(insigniaRegla(`de ${hecho.origen}`, "origen"));
+    }
+    condiciones.append(item);
   });
+  bloque.append(cabecera, condiciones);
+  return bloque;
+}
 
-  seccion.append(paso1, paso2, paso3);
-  if (r.notas.length) {
-    const ul = el("ul", "notas");
-    r.notas.forEach((nota) => ul.append(el("li", null, nota)));
-    seccion.append(el("strong", null, "Notas"), ul);
+function notasDelRazonamiento(resultado) {
+  const notas = [];
+  if (resultado.no_aplicadas.length) {
+    const varias = resultado.no_aplicadas.length > 1;
+    const origen = resultado.origen_restriccion &&
+      resultado.origen_restriccion !== "usuario"
+      ? ` (${resultado.origen_restriccion})` : "";
+    notas.push(`Descarté ${unirConY(resultado.no_aplicadas)} porque ` +
+      `${varias ? "solo aplican" : "solo aplica"} en casas sin mascotas ` +
+      `ni niños pequeños, y en la suya los hay${origen}.`);
   }
+  resultado.finales.forEach((regla) => {
+    if (regla.excluidas.length) {
+      notas.push(`Quité ${unirConY(regla.excluidas)} de ${regla.id} porque ` +
+        `${regla.excluidas.length > 1 ? "son tóxicas" : "es tóxica"} ` +
+        "según ASPCA.");
+    }
+    if (!regla.mostrada) {
+      notas.push(`${regla.id} no aparece entre las opciones porque sus ` +
+                 "plantas ya están más arriba.");
+    } else if (regla.repetidas.length) {
+      notas.push(`En ${regla.id} no repito ${unirConY(regla.repetidas)} ` +
+        `porque ya ${regla.repetidas.length > 1 ? "aparecen" : "aparece"} ` +
+        "más arriba.");
+    }
+  });
+  return notas;
+}
+
+function razonamiento(resultado) {
+  const seccion = el("section", "razonamiento");
+  seccion.setAttribute("aria-labelledby", "titulo-razonamiento");
+  const titulo = el("h2", null, resultado.principal
+    ? "¿Por qué esta recomendación?" : "¿Por qué no hay recomendación?");
+  titulo.id = "titulo-razonamiento";
+  const tramos = el("ol", "tramos");
+
+  const tramo1 = el("li", "tramo");
+  const respuestas = el("ul", "lista-respuestas");
+  resultado.respuestas.forEach((respuesta) => {
+    const indice = PREGUNTAS.findIndex((p) => p.clave === respuesta.clave);
+    const cambiar = el("button", "enlace", "Cambiar");
+    cambiar.type = "button";
+    cambiar.setAttribute("aria-label", `Cambiar: ${PREGUNTAS[indice].texto}`);
+    cambiar.addEventListener("click", () => irA(indice));
+    const item = el("li");
+    item.append(el("span", null, frase(respuesta.clave, respuesta.valor)),
+                cambiar);
+    respuestas.append(item);
+  });
+  tramo1.append(el("h3", null, "Sus respuestas"), respuestas);
+
+  const tramo2 = el("li", "tramo");
+  const deducciones = el("ul", "deducciones");
+  resultado.intermedias.forEach((regla) => {
+    const item = el("li", "deduccion");
+    const pasoRegla = el("span", "paso-regla");
+    const flecha1 = el("span", "flecha", "→");
+    const flecha2 = el("span", "flecha", "→");
+    flecha1.setAttribute("aria-hidden", "true");
+    flecha2.setAttribute("aria-hidden", "true");
+    pasoRegla.append(flecha1, insigniaRegla(regla.id), flecha2);
+    item.append(
+      el("span", "causas",
+         unirFrases(regla.hechos.map((h) => frase(h.clave, h.valor)))),
+      pasoRegla,
+      el("span", "hecho-derivado",
+         frase(regla.concluye.clave, regla.concluye.valor)));
+    deducciones.append(item);
+  });
+  tramo2.append(el("h3", null, "Lo que deduje"), deducciones);
+
+  const tramo3 = el("li", "tramo");
+  if (resultado.principal) {
+    const decisiva = resultado.finales.find(
+      (regla) => regla.id === resultado.principal.id);
+    tramo3.append(el("h3", null, "La regla que decidió"),
+                  reglaFinal(decisiva, true));
+    const otras = resultado.finales.filter((regla) => regla !== decisiva);
+    if (otras.length) {
+      const detalles = el("details", "otras-reglas desplegable");
+      detalles.append(el("summary", null,
+        `Otras reglas que también se cumplieron (${otras.length})`));
+      otras.forEach((regla) => detalles.append(reglaFinal(regla, false)));
+      tramo3.append(detalles);
+    }
+  } else {
+    tramo3.append(el("h3", null, "Ninguna regla de recomendación se cumplió"),
+      el("p", "vacio", "Con lo que deduje, a ninguna regla final le " +
+         "alcanzan las condiciones."));
+  }
+  const notas = notasDelRazonamiento(resultado);
+  if (notas.length) {
+    const lista = el("ul", "notas");
+    notas.forEach((nota) => lista.append(el("li", null, nota)));
+    tramo3.append(lista);
+  }
+
+  tramos.append(tramo1, tramo2, tramo3);
+  seccion.append(titulo, tramos);
   return seccion;
 }
 
-function mostrarResultado(r) {
-  const contenedor = $("#resultado");
-  contenedor.replaceChildren(el("h2", null, "Resultado"));
-  if (r.principal) {
-    contenedor.append(tarjetaRecomendacion(r.principal, true));
-    if (r.alternativas.length) {
-      contenedor.append(el("h3", null, "Alternativas"));
-      r.alternativas.forEach((alt, i) =>
-        contenedor.append(tarjetaRecomendacion(alt, false, i + 2)));
-    }
-  } else {
-    const caja = el("div", "sin-conclusion");
-    caja.append(el("strong", null, "Sin conclusión"),
-      el("p", null, "Ninguna regla de la base de conocimiento cubre esta " +
-         "combinación de respuestas. El sistema prefiere decirlo antes " +
-         "que inventar una recomendación."),
-      el("p", null, (r.hueco ? `Sugerencia (hueco conocido ${r.hueco.id}): `
-                             : "Sugerencia: ") + r.sugerencia));
-    contenedor.append(caja);
+function pintarResultado(resultado) {
+  const pantalla = $("#pantalla-resultado");
+  const izquierda = el("div", "columna");
+  izquierda.append(resultado.principal ? etiquetaVivero(resultado.principal)
+                                       : etiquetaEnBlanco(resultado));
+  if (resultado.alternativas.length) {
+    izquierda.append(bloqueAlternativas(resultado.alternativas));
   }
-  contenedor.append(cadenaDeInferencia(r));
-  contenedor.append(el("p", "suave", r.guardado
-    ? "✓ Consulta guardada en historial_consultas.csv"
-    : "No se pudo guardar el historial (vea la terminal)."));
-  if (window.innerWidth < 920) contenedor.scrollIntoView({behavior: "smooth"});
-}
-
-async function cargarHistorial() {
-  const cuerpo = $("#historial");
-  try {
-    const filas = await (await fetch("api/historial")).json();
-    cuerpo.replaceChildren();
-    if (!filas.length) {
-      const tr = el("tr"), td = el("td", "suave",
-        "Todavía no hay consultas guardadas.");
-      td.colSpan = 4; tr.append(td); cuerpo.append(tr);
-      return;
-    }
-    filas.forEach((fila) => {
-      const tr = el("tr");
-      tr.append(el("td", null, fila.fecha_hora),
-                el("td", null, fila.recomendacion_principal),
-                el("td", null, fila.reglas_activadas),
-                el("td", "pequeno", fila.respuestas));
-      cuerpo.append(tr);
-    });
-  } catch (error) {
-    cuerpo.replaceChildren();
-  }
-}
-
-async function consultar(evento) {
-  evento.preventDefault();
-  const datos = Object.fromEntries(new FormData($("#formulario")));
-  document.querySelectorAll(".pregunta").forEach((grupo) =>
-    grupo.classList.toggle("falta", !datos[grupo.dataset.clave]));
-  const faltan = PREGUNTAS.filter((p) => !datos[p.clave]);
-  if (faltan.length) {
-    mostrarErrores(faltan.map((p) => `Falta responder: ${p.texto}`));
-    return;
-  }
-  mostrarErrores([]);
-  try {
-    const respuesta = await fetch("api/consultar", {
-      method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify(datos)});
-    const json = await respuesta.json();
-    if (!respuesta.ok) {
-      mostrarErrores(json.errores || ["Error del servidor."]);
-      return;
-    }
-    mostrarResultado(json);
-    cargarHistorial();
-  } catch (error) {
-    mostrarErrores(["No se pudo conectar con el servidor. ¿Sigue " +
-                    "corriendo el programa en la terminal?"]);
-  }
+  izquierda.append(acciones(resultado));
+  const derecha = el("div", "columna");
+  derecha.append(razonamiento(resultado));
+  pantalla.replaceChildren(izquierda, derecha);
+  mostrarPantalla("resultado");
+  window.scrollTo({ top: 0, behavior: MOVIMIENTO ? "smooth" : "auto" });
+  pantalla.focus({ preventScroll: true });
 }
 
 function nuevaConsulta() {
-  $("#formulario").reset();
-  document.querySelectorAll(".pregunta").forEach((grupo) =>
-    grupo.classList.remove("falta"));
-  mostrarErrores([]);
-  resultadoVacio();
-  window.scrollTo({top: 0, behavior: "smooth"});
+  estado.respuestas = {};
+  irA(0);
+  window.scrollTo({ top: 0, behavior: MOVIMIENTO ? "smooth" : "auto" });
 }
 
-construirFormulario();
-resultadoVacio();
+// ---- Historial -------------------------------------------------------------
+
+const MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep",
+               "oct", "nov", "dic"];
+
+function fechaCorta(texto) {
+  const partes = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})/.exec(texto || "");
+  if (!partes) return texto;
+  return `${Number(partes[3])} ${MESES[Number(partes[2]) - 1]} ${partes[1]}, ` +
+         `${partes[4]}:${partes[5]}`;
+}
+
+function respuestasNaturales(texto) {
+  return (texto || "").split(";").map((par) => par.trim()).filter(Boolean)
+    .map((par) => { const [clave, valor] = par.split("="); return frase(clave, valor); });
+}
+
+function celda(etiqueta, contenido, clase) {
+  const td = el("td", clase);
+  td.dataset.etiqueta = etiqueta;
+  td.append(contenido);
+  return td;
+}
+
+async function cargarHistorial() {
+  const contenedor = $("#historial");
+  let filas;
+  try {
+    filas = await (await fetch("api/historial")).json();
+  } catch (error) {
+    contenedor.replaceChildren(el("p", "vacio", "No pude leer el historial."));
+    return;
+  }
+  if (!filas.length) {
+    contenedor.replaceChildren(el("p", "vacio",
+      "Todavía no hay consultas. La primera que haga aparecerá aquí."));
+    return;
+  }
+  const tabla = el("table", "tabla");
+  const cabecera = el("tr");
+  ["Fecha", "Recomendación principal", "Reglas activadas", "Respuestas"]
+    .forEach((texto) => cabecera.append(el("th", null, texto)));
+  const thead = el("thead");
+  thead.append(cabecera);
+  const cuerpo = el("tbody");
+  filas.forEach((fila) => {
+    const frases = respuestasNaturales(fila.respuestas);
+    const detalles = el("details", "desplegable");
+    detalles.append(el("summary", null, `Ver ${frases.length} respuestas`));
+    const lista = el("ul");
+    frases.forEach((texto) => lista.append(el("li", null, texto)));
+    detalles.append(lista);
+    const tr = el("tr");
+    tr.append(celda("Fecha", fechaCorta(fila.fecha_hora)),
+              celda("Recomendación principal", fila.recomendacion_principal),
+              celda("Reglas activadas", fila.reglas_activadas, "reglas"),
+              celda("Respuestas", detalles));
+    cuerpo.append(tr);
+  });
+  tabla.append(thead, cuerpo);
+  contenedor.replaceChildren(tabla);
+}
+
+// ---- Teclado: los mismos atajos que la terminal ----------------------------
+
+document.addEventListener("keydown", (evento) => {
+  if ($("#pantalla-consulta").hidden || evento.altKey || evento.ctrlKey ||
+      evento.metaKey) return;
+  const pregunta = PREGUNTAS[estado.paso];
+  const indice = pregunta.opciones.findIndex(([valor], i) =>
+    evento.key === String(i + 1) || (valor.length === 1 && evento.key === valor));
+  if (indice !== -1) {
+    const radio = radios()[indice];
+    radio.checked = true;
+    radio.dispatchEvent(new Event("change"));
+    radio.focus();
+    evento.preventDefault();
+  } else if (evento.key === "Enter" &&
+             !(document.activeElement instanceof HTMLButtonElement)) {
+    // Como en la terminal, Enter confirma la respuesta (los botones ya
+    // responden a Enter por su cuenta).
+    $("#formulario").requestSubmit();
+    evento.preventDefault();
+  }
+});
+
+$("#formulario").addEventListener("submit", avanzar);
+$("#atras").addEventListener("click", () => irA(estado.paso - 1));
+pintarPregunta(false);
 cargarHistorial();
-$("#formulario").addEventListener("submit", consultar);
-$("#nueva").addEventListener("click", nuevaConsulta);
 </script>
 </body>
 </html>
