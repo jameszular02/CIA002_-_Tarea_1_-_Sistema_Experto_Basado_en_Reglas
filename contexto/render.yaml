@@ -1,0 +1,12 @@
+# Despliegue en Render (https://render.com): New → Blueprint → elegir este repo.
+# Usa solo la biblioteca estándar de Python, así que no hay dependencias que instalar.
+services:
+  - type: web
+    name: sistema-experto
+    runtime: python
+    plan: free
+    buildCommand: python --version
+    startCommand: python loria_james_tarea1.py --web $PORT
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
